@@ -12,7 +12,7 @@ import google.generativeai as genai
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 def get_gemini_response(input, image, prompt):
-    model = genai.GenerativeModel("gemini-pro-vision")
+    model = genai.GenerativeModel("gemini-1.5-flash")
     response = model.generate_content([input, image[0], prompt])
     return response.text 
 
@@ -36,7 +36,7 @@ def main():
     st.set_page_config(page_title="Nutritionist-Food-Recognition-APP", page_icon="🍲")
     st.header("Your Dietitian and Nutritionist")
     
-    language_options = ["English", "Hindi"]
+    language_options = ["English"]
     selected_language = st.selectbox("Select Language:", language_options)
     
     if selected_language == "English":
@@ -67,33 +67,7 @@ def main():
         2. Your task is to provide 2 Non-vegeterian dish alternative to the dish uploaded in the image which have the same nutritional value.
         """
         
-    elif selected_language == "Hindi":
-        input_prompt1 = """
-        उपयुक्त छवि में कैद किए गए स्वादिष्ट व्यंजन के रहस्यों की खोज में एक रसोईय अन्वेषण पर प्रवृत्त हों:
-        1. डिश के बारे में मुख्य विवरण जानें, जिसमें इसका नाम और रसोईय स्वभाव है।
-        2. डिश की आकर्षक उत्पत्ति की खोज करें, जो इसके सांस्कृतिक और ऐतिहासिक महत्व को खोलती है।
-        3. डिश के सर्वोत्तम स्वाद प्रोफाइल में योगदान करने वाली आइटमों की समृद्धि में डूबें।
-        """
-
-        input_prompt2 = """
-        उत्सुक शेफ्स को मार्गदर्शन करने वाले रसोई के मास्टर शेफ के रूप में, विवेचना करें:
-        1. सर्वोत्तम सामग्री का चयन करने की शुरुआत करें, गुणवत्ता और ताजगी पर जोर दें।
-        2. प्रत्येक आइटम को सहीपन से धोने, छीलने और काटने की प्रक्रिया की विस्तार से बताएं।
-        3. खाद्य प्रक्रिया के पीछे रसोईय कला को एक-एक कदम से बताएं।
-        4. सामान्य से अद्वितीय बनाने के लिए डिश को उच्चतम करने के लिए विशेषज्ञ सुझाव और तकनीक साझा करें।
-        """
-
-        input_prompt3 = """
-        एक पोषण सलाहकार के रूप में, डिश के पोषण सम्बंधी सम्पूर्ण अवलोकन प्रस्तुत करें:
-        1. कैलोरी, प्रोटीन, वसा और कार्बोहाइड्रेट की घटाई गई पोषण मूल्यों को दिखाने वाला एक तालिका प्रदर्शित करें।
-        2. हर आइटम के पोषण योगदान को बताने वाली दूसरी तालिका बनाएं, जिसमें आहार रहस्य हैं।
-        """
-
-        input_prompt4 = """
-        एक रसोई समाचार पत्र के रूप में, समर्थन और पोषण में समानता के साथ एक शाकाहारी वैकल्पिक डिश की विस्तृत सूची बनाएं:
-        1. प्राकृतिक और ताजगी को बढ़ावा देने के लिए एक शाकाहारी वैकल्पिक डिश के रूप में सूक्ष्मता से स्पष्टीकृत करें।
-        2. मौजूदा के पोषण मूल्यों के साथ समर्थन और पोषण में समानता के लिए एक सूची बनाएं, नॉन-वेज वैकल्पिक के लिए एक लिस्ट।
-        """
+    
         
     input_text = st.text_input("Input Prompt: ", key="input")
     

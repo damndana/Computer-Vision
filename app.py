@@ -1,899 +1,584 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-from PIL import Image
 import io
-from fuzzywuzzy import fuzz
-from fuzzywuzzy import process
 import json
-import re
-from typing import Tuple, Dict, Optional, List
-import plotly.express as px
-import plotly.graph_objects as go
 import os
 import pathlib
+import re
+from typing import Any, Dict, List, Optional, Tuple
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
+import pandas as pd
+import streamlit as st
+from dotenv import load_dotenv
+from fuzzywuzzy import fuzz
+from PIL import Image
+
+from database import load_database_csv, load_database_pg, save_result_row
+from theme import inject_theme, render_sidebar_nav
+
+load_dotenv()
 
 st.set_page_config(
-    page_title="AI Meal Recognition Agent",
+    page_title="Nutristeppe — проверка блюда",
     page_icon="🍽️",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="centered",
+    initial_sidebar_state="collapsed",
 )
 
-# Custom CSS for Dark Theme
-st.markdown("""
-<style>
-    /* Main dark theme */
-    .stApp {
-        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        color: #ffffff !important;
-    }
-    
-    /* All text white by default */
-    .stApp, .stApp * {
-        color: #ffffff !important;
-    }
-    
-    /* Headers */
-    h1, h2, h3, h4, h5, h6 {
-        color: #ffffff !important;
-        font-weight: 600 !important;
-    }
-    
-    /* Main header gradient */
-    .main-header {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        padding: 2rem;
-        border-radius: 1rem;
-        text-align: center;
-        margin-bottom: 2rem;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
-    
-    .main-header h1, .main-header p {
-        color: white !important;
-    }
-    
-    /* Nutrition cards */
-    .nutrition-card {
-        background: rgba(255,255,255,0.1);
-        backdrop-filter: blur(10px);
-        padding: 1rem;
-        border-radius: 0.5rem;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-        margin: 0.5rem 0;
-        border: 1px solid rgba(255,255,255,0.2);
-    }
-    
-    .metric-value {
-        font-size: 1.5rem;
-        font-weight: bold;
-        color: #667eea !important;
-    }
-    
-    .metric-label {
-        font-size: 0.8rem;
-        color: #cccccc !important;
-    }
-    
-    /* Match highlight */
-    .match-highlight {
-        background: rgba(46, 204, 113, 0.2);
-        border-left: 4px solid #2ecc71;
-        padding: 0.5rem;
-        border-radius: 0.5rem;
-        margin: 0.5rem 0;
-    }
-    
-    /* Sidebar styling */
-    .css-1d391kg, .css-12oz5g7 {
-        background: rgba(0,0,0,0.3);
-    }
-    
-    /* Buttons */
-    .stButton > button {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white !important;
-        border: none;
-        padding: 0.5rem 2rem;
-        font-weight: bold;
-        border-radius: 0.5rem;
-        transition: all 0.3s ease;
-    }
-    
-    .stButton > button:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-    }
-    
-    /* Expander styling */
-    .streamlit-expanderHeader {
-        background: rgba(255,255,255,0.05);
-        border-radius: 0.5rem;
-    }
-    
-    /* Dataframe styling */
-    .dataframe {
-        background: rgba(255,255,255,0.05);
-        border-radius: 0.5rem;
-    }
-    
-    /* Metric boxes */
-    .stMetric {
-        background: rgba(255,255,255,0.05);
-        padding: 0.5rem;
-        border-radius: 0.5rem;
-    }
-    
-    /* File uploader */
-    .stFileUploader {
-        background: rgba(255,255,255,0.05);
-        border-radius: 0.5rem;
-        padding: 1rem;
-    }
-    
-    /* Info/Warning/Success boxes */
-    .stAlert {
-        background: rgba(0,0,0,0.5);
-        border-radius: 0.5rem;
-    }
-    
-    /* Select boxes */
-    .stSelectbox div[data-baseweb="select"] {
-        background: rgba(255,255,255,0.05);
-        border-radius: 0.5rem;
-    }
-    
-    /* Slider */
-    .stSlider {
-        background: rgba(255,255,255,0.05);
-        padding: 0.5rem;
-        border-radius: 0.5rem;
-    }
-    
-    /* Tabs */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 2rem;
-        background: rgba(255,255,255,0.05);
-        padding: 0.5rem;
-        border-radius: 0.5rem;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        color: white !important;
-    }
-    
-    /* Plotly charts text */
-    .plotly .main-svg {
-        background: rgba(0,0,0,0.3) !important;
-    }
-    
-    /* Scrollbar */
-    ::-webkit-scrollbar {
-        width: 10px;
-        height: 10px;
-    }
-    
-    ::-webkit-scrollbar-track {
-        background: #1a1a2e;
-    }
-    
-    ::-webkit-scrollbar-thumb {
-        background: #667eea;
-        border-radius: 5px;
-    }
-    
-    ::-webkit-scrollbar-thumb:hover {
-        background: #764ba2;
-    }
-    
-    /* Recipe container */
-    .recipe-container {
-        background: rgba(255,255,255,0.05);
-        padding: 1rem;
-        border-radius: 0.5rem;
-        margin-top: 1rem;
-    }
-</style>
-""", unsafe_allow_html=True)
+inject_theme()
+render_sidebar_nav()
 
-# ============================================================================
-# DATABASE SETUP - LOAD FROM CSV
-# ============================================================================
+# -----------------------------------------------------------------------------
+# Text normalization & synonyms (RU / EN)
+# -----------------------------------------------------------------------------
 
-@st.cache_data
-def load_database() -> pd.DataFrame:
-    """
-    Load the dish database from CSV file.
-    """
-    try:
-        base_path = pathlib.Path(__file__).parent
-        csv_path = base_path / '2April.csv'
-        
-        if not csv_path.exists():
-            st.error(f"❌ CSV file not found at: {csv_path}")
-            return pd.DataFrame()
+DISH_SYNONYMS = {
+    "картошка": "картофель",
+    "картошки": "картофель",
+    "помидор": "томат",
+    "помидоры": "томат",
+    "огурец": "огурцы",
+    "макароны": "макаронные изделия",
+    "паста": "макаронные изделия",
+    "ризотто": "рис",
+    "ceasar": "цезарь",
+    "caesar": "цезарь",
+    "pizza": "пицца",
+    "burger": "бургер",
+    "salad": "салат",
+}
 
-        # Load the CSV file
-        df = pd.read_csv(csv_path)
-        
-        # Clean column names (remove whitespace)
-        df.columns = df.columns.str.strip()
-        
-        # Convert numeric columns properly
-        numeric_cols = ['kilocalories', 'protein', 'fat', 'carbohydrate', 
-                       'fiber', 'sugar_mg', 'salt_total_mg', 'saturated_fat_mg',
-                       'serving_size_g', 'kilocalories_portion', 'calculated_kcal']
-        
-        for col in numeric_cols:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-        
-        # Create a searchable text column with dish name (Russian)
-        df['search_text'] = df['name'].fillna('').str.lower()
-        
-        st.success(f"✅ Database loaded successfully! Total dishes: {len(df)}")
-        return df
-        
-    except FileNotFoundError:
-        st.error("❌ CSV file '30March.csv' not found! Please make sure the file is in the same directory.")
-        return pd.DataFrame()
-    except Exception as e:
-        st.error(f"❌ Error loading database: {str(e)}")
-        return pd.DataFrame()
 
-# ============================================================================
-# GEMINI AI AGENT SETUP - FIXED FOR RUSSIAN OUTPUT
-# ============================================================================
+def normalize_text(s: str) -> str:
+    if not s or not isinstance(s, str):
+        return ""
+    t = s.lower().strip()
+    t = t.replace("ё", "е")
+    t = re.sub(r"\s+", " ", t)
+    return t
 
-class GeminiMealAgent:
-    def __init__(self, api_key: str):
-        """Initialize the Gemini AI agent."""
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        self.genai = genai
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
-        
-    def analyze_meal_image(self, image: Image.Image) -> Dict:
-        """
-        Analyze meal image to detect one or multiple dishes and estimate portions.
-        Returns: {'dishes': [{'dish_name': str, 'portion_grams': float, 'confidence': float}, ...]}
-        """
-        try:
-            # Convert PIL Image to bytes
-            img_byte_arr = io.BytesIO()
-            image.save(img_byte_arr, format='JPEG')
-            img_byte_arr = img_byte_arr.getvalue()
-            
-            # Create the prompt for Gemini - FORCED RUSSIAN OUTPUT
-            prompt = """
-            Ты профессиональный ИИ для распознавания еды. Проанализируй изображение с едой и предоставь:
-            
-            1. Список до 6 блюд, которые видны на изображении.
-            2. Предполагаемый размер порции в граммах для каждого блюда.
-            3. Уровень уверенности для каждого блюда (0-1).
-            
-            ВАЖНО: ВСЕ названия блюд должны быть ТОЛЬКО на РУССКОМ языке!
-            Например: "пицца" вместо "pizza", "бургер" вместо "burger", "салат" вместо "salad"
-            
-            Верни ТОЛЬКО валидный JSON в одном из этих форматов:
-            [
-                {"dish_name": "название блюда на русском", "portion_grams": 350, "confidence": 0.95},
-                ...
-            ]
-            
-            Если видно только одно блюдо, верни массив с одним элементом.
-            Если не можешь определить блюдо, используй {"dish_name": "неизвестно", "portion_grams": 0, "confidence": 0}.
-            
-            ОБЯЗАТЕЛЬНО используй русские названия для ВСЕХ блюд, независимо от кухни!
-            """
-            
-            # Send to Gemini
-            response = self.model.generate_content([
-                prompt,
-                {"mime_type": "image/jpeg", "data": img_byte_arr}
-            ])
-            
-            # Parse the response
-            response_text = response.text
-            json_match = re.search(r'\[.*\]', response_text, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group())
-            else:
-                obj_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-                if obj_match:
-                    parsed = [json.loads(obj_match.group())]
-                else:
-                    parsed = []
 
-            if not isinstance(parsed, list):
-                parsed = [parsed]
+def apply_synonyms(text_norm: str) -> str:
+    out = text_norm
+    for a, b in DISH_SYNONYMS.items():
+        if a in out:
+            out = out.replace(a, b)
+    return out
 
-            dishes = []
-            for item in parsed:
-                if not isinstance(item, dict):
-                    continue
-                dish_name = item.get('dish_name', 'unknown')
-                # Convert any English names to Russian approximation if needed
-                dish_name = self._ensure_russian_name(dish_name)
-                dishes.append({
-                    'dish_name': dish_name,
-                    'portion_grams': float(item.get('portion_grams', 0) or 0),
-                    'confidence': float(item.get('confidence', 0) or 0)
-                })
 
-            if not dishes:
-                dishes = [{'dish_name': 'неизвестно', 'portion_grams': 0, 'confidence': 0}]
+def get_gemini_api_key() -> Optional[str]:
+    for k in ("GOOGLE_GEMINI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"):
+        v = os.environ.get(k, "").strip()
+        if v:
+            return v
+    return None
 
-            return {'dishes': dishes}
-            
-        except Exception as e:
-            st.error(f"Error analyzing image: {str(e)}")
-            return {'dishes': [{'dish_name': 'неизвестно', 'portion_grams': 0, 'confidence': 0}]}
-    
-    def _ensure_russian_name(self, name: str) -> str:
-        """Convert common English dish names to Russian."""
-        english_to_russian = {
-            'pizza': 'пицца',
-            'burger': 'бургер',
-            'salad': 'салат',
-            'soup': 'суп',
-            'pasta': 'паста',
-            'rice': 'рис',
-            'chicken': 'курица',
-            'beef': 'говядина',
-            'fish': 'рыба',
-            'ceasar': 'цезарь',
-            'caesar': 'цезарь',
-            'salami': 'салями',
-            'cheese': 'сыр',
-            'sandwich': 'сэндвич',
-            'fries': 'картофель фри',
-            'potato': 'картофель',
-            'steak': 'стейк',
-            'sushi': 'суши',
-            'roll': 'ролл',
-            'noodle': 'лапша',
-            'curry': 'карри',
-            'taco': 'тако',
-            'wrap': 'ролл',
-            'bowl': 'миска',
-            'plate': 'тарелка',
-            'with': 'с',
-            'and': 'и'
-        }
-        
-        name_lower = name.lower()
-        for eng, rus in english_to_russian.items():
-            if eng in name_lower:
-                name = name_lower.replace(eng, rus)
-        
-        # Capitalize first letter
-        if name and len(name) > 0:
-            name = name[0].upper() + name[1:] if len(name) > 1 else name.upper()
-        
-        return name
 
-# ============================================================================
-# SEARCH ALGORITHMS
-# ============================================================================
+def compress_image_bytes(image: Image.Image, max_side: int = 1280, quality: int = 82) -> bytes:
+    img = image.convert("RGB")
+    w, h = img.size
+    if max(w, h) > max_side:
+        scale = max_side / float(max(w, h))
+        img = img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+def image_from_upload_or_camera(
+    uploaded_file, camera_photo
+) -> Optional[Image.Image]:
+    if uploaded_file is not None:
+        return Image.open(uploaded_file).convert("RGB")
+    if camera_photo is not None:
+        return Image.open(camera_photo).convert("RGB")
+    return None
+
+
+# -----------------------------------------------------------------------------
+# Search engine (fuzzy, token, Levenshtein-style, hybrid; RU + EN)
+# -----------------------------------------------------------------------------
+
 
 class DishSearchEngine:
     def __init__(self, database: pd.DataFrame):
         self.database = database
-        
-    def search_by_fuzzy_matching(self, query: str, threshold: int = 60) -> pd.DataFrame:
-        """
-        Search dishes using fuzzy string matching algorithm on Russian names only.
-        """
-        if query.lower() == 'неизвестно' or query.lower() == 'unknown' or not query:
-            return pd.DataFrame()
-        
-        results = []
-        query_lower = query.lower()
-        
-        for idx, row in self.database.iterrows():
-            # Get the dish name (Russian)
-            dish_name = str(row['name']).lower()
-            
-            # Calculate match scores using various fuzzy methods
-            name_score = fuzz.ratio(query_lower, dish_name)
-            partial_score = fuzz.partial_ratio(query_lower, dish_name)
-            token_score = fuzz.token_sort_ratio(query_lower, dish_name)
-            
-            # Final score is the best of all methods
-            final_score = max(name_score, partial_score, token_score)
-            
-            if final_score >= threshold:
-                results.append({
-                    'score': final_score,
-                    'index': idx,
-                    **row.to_dict()
-                })
-        
-        # Sort by score and return
-        results_df = pd.DataFrame(results)
-        if not results_df.empty:
-            results_df = results_df.sort_values('score', ascending=False)
-        
-        return results_df
-    
-    def search_by_token_matching(self, query: str) -> pd.DataFrame:
-        """
-        Search using token-based matching (more precise for multi-word queries).
-        """
-        if query.lower() == 'неизвестно' or query.lower() == 'unknown' or not query:
-            return pd.DataFrame()
-        
-        query_tokens = set(query.lower().split())
-        results = []
-        
-        for idx, row in self.database.iterrows():
-            name_tokens = set(str(row['name']).lower().split())
-            
-            # Calculate Jaccard similarity
-            if len(query_tokens) == 0:
-                jaccard_score = 0
-            else:
-                intersection = len(query_tokens & name_tokens)
-                union = len(query_tokens | name_tokens)
-                jaccard_score = intersection / union if union > 0 else 0
-            
-            if jaccard_score > 0.3:  # Threshold
-                results.append({
-                    'score': jaccard_score * 100,
-                    'index': idx,
-                    **row.to_dict()
-                })
-        
-        results_df = pd.DataFrame(results)
-        if not results_df.empty:
-            results_df = results_df.sort_values('score', ascending=False)
-        
-        return results_df
-    
-    def search_by_levenshtein(self, query: str) -> pd.DataFrame:
-        """
-        Search using Levenshtein distance for close matches.
-        Using fuzz.ratio which is based on Levenshtein distance.
-        """
-        if query.lower() == 'неизвестно' or query.lower() == 'unknown' or not query:
-            return pd.DataFrame()
-        
-        query_lower = query.lower()
-        results = []
-        
-        for idx, row in self.database.iterrows():
-            dish_name = str(row['name']).lower()
-            
-            # Use fuzz.ratio which is based on Levenshtein distance
-            similarity = fuzz.ratio(query_lower, dish_name)
-            
-            if similarity >= 50:
-                results.append({
-                    'score': similarity,
-                    'index': idx,
-                    **row.to_dict()
-                })
-        
-        results_df = pd.DataFrame(results)
-        if not results_df.empty:
-            results_df = results_df.sort_values('score', ascending=False)
-        
-        return results_df
-    
-    def hybrid_search(self, query: str) -> pd.DataFrame:
-        """
-        Hybrid search combining fuzzy, token, and levenshtein matching for best results.
-        """
-        fuzzy_results = self.search_by_fuzzy_matching(query, threshold=50)
-        token_results = self.search_by_token_matching(query)
-        levenshtein_results = self.search_by_levenshtein(query)
-        
-        results_list = []
-        if not fuzzy_results.empty:
-            results_list.append(fuzzy_results)
-        if not token_results.empty:
-            results_list.append(token_results)
-        if not levenshtein_results.empty:
-            results_list.append(levenshtein_results)
-        
-        if not results_list:
-            return pd.DataFrame()
-        
-        # Combine all results
-        combined = pd.concat(results_list, ignore_index=True)
-        
-        # Deduplicate by bls_code or name
-        if 'bls_code' in combined.columns:
-            combined = combined.drop_duplicates(subset=['bls_code'], keep='first')
-        else:
-            combined = combined.drop_duplicates(subset=['name'], keep='first')
-        
-        # Sort by score
-        combined = combined.sort_values('score', ascending=False)
-        
-        return combined.head(5)
 
-# ============================================================================
-# NUTRITION CALCULATOR
-# ============================================================================
-
-class NutritionCalculator:
     @staticmethod
-    def calculate_nutrition(dish: pd.Series, portion_grams: float) -> Dict:
-        """
-        Calculate nutritional values based on detected portion.
-        """
-        # Get base serving size (default to 100g if not specified)
-        base_serving = dish.get('serving_size_g', 100)
-        if pd.isna(base_serving) or base_serving == 0:
-            base_serving = 100
-        
-        # Calculate ratio
-        ratio = portion_grams / base_serving
-        
-        # Calculate values
-        nutrition = {
-            'dish_name': dish.get('name', 'Unknown'),
-            'portion_grams': portion_grams,
-            'kilocalories': dish.get('kilocalories', 0) * ratio,
-            'protein': dish.get('protein', 0) * ratio / 1000,  # Convert to grams
-            'fat': dish.get('fat', 0) * ratio / 1000,
-            'carbohydrate': dish.get('carbohydrate', 0) * ratio / 1000,
-            'fiber': dish.get('fiber', 0) * ratio / 1000 if 'fiber' in dish else 0,
-            'sugar_mg': dish.get('sugar_mg', 0) * ratio,
-            'salt_total_mg': dish.get('salt_total_mg', 0) * ratio,
-            'saturated_fat_mg': dish.get('saturated_fat_mg', 0) * ratio,
-            'match_score': dish.get('score', 0) if 'score' in dish else 100,
-            'recipe': dish.get('steps', 'Нет рецепта'),
-            'ingredients': dish.get('ingredients', 'Нет списка ингредиентов'),
-            'health_index': dish.get('index_health', 'N/A')
-        }
-        
-        return nutrition
+    def _row_names(row: pd.Series) -> Tuple[str, str]:
+        ru = normalize_text(str(row.get("name", "") or ""))
+        en = normalize_text(str(row.get("name_en", "") or ""))
+        return ru, en
 
-# ============================================================================
-# UI COMPONENTS
-# ============================================================================
+    def _score_query_vs_names(self, q: str, ru: str, en: str) -> float:
+        scores: List[float] = []
+        for name in (ru, en):
+            if not name:
+                continue
+            scores.extend(
+                [
+                    float(fuzz.ratio(q, name)),
+                    float(fuzz.partial_ratio(q, name)),
+                    float(fuzz.token_sort_ratio(q, name)),
+                    float(fuzz.token_set_ratio(q, name)),
+                ]
+            )
+        return max(scores) if scores else 0.0
 
-def display_nutrition_card(nutrition: Dict):
-    """Display nutrition information in a beautiful card layout."""
-    
-    col1, col2, col3, col4 = st.columns(4)
-    
-    with col1:
-        st.markdown(f"""
-        <div class="nutrition-card">
-            <div class="metric-value">{nutrition['kilocalories']:.0f}</div>
-            <div class="metric-label">🔥 Калории (ккал)</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col2:
-        st.markdown(f"""
-        <div class="nutrition-card">
-            <div class="metric-value">{nutrition['protein']:.1f}г</div>
-            <div class="metric-label">💪 Белки</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col3:
-        st.markdown(f"""
-        <div class="nutrition-card">
-            <div class="metric-value">{nutrition['fat']:.1f}г</div>
-            <div class="metric-label">🥑 Жиры</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    with col4:
-        st.markdown(f"""
-        <div class="nutrition-card">
-            <div class="metric-value">{nutrition['carbohydrate']:.1f}г</div>
-            <div class="metric-label">🍚 Углеводы</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    # Additional macros
-    col5, col6, col7 = st.columns(3)
-    
-    with col5:
-        st.metric("Пищевые волокна", f"{nutrition['fiber']:.1f}г" if nutrition['fiber'] > 0 else "Н/Д")
-    
-    with col6:
-        sugar_g = nutrition['sugar_mg'] / 1000
-        st.metric("Сахар", f"{sugar_g:.1f}г")
-    
-    with col7:
-        salt_g = nutrition['salt_total_mg'] / 1000
-        st.metric("Соль", f"{salt_g:.1f}г")
+    def _invalid_query(self, query: str) -> bool:
+        n = normalize_text(query)
+        return not n or n in ("неизвестно", "unknown")
 
-def display_macros_chart(nutrition: Dict):
-    """Display a pie chart of macronutrient distribution."""
-    
-    macros = {
-        'Белки': nutrition['protein'],
-        'Жиры': nutrition['fat'],
-        'Углеводы': nutrition['carbohydrate']
-    }
-    
-    fig = px.pie(
-        values=list(macros.values()),
-        names=list(macros.keys()),
-        title="Распределение макронутриентов",
-        color_discrete_sequence=px.colors.qualitative.Set2
-    )
-    
-    # Update chart for dark theme
-    fig.update_layout(
-        paper_bgcolor='rgba(0,0,0,0)',
-        plot_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='white'),
-        title_font=dict(color='white')
-    )
-    fig.update_traces(textposition='inside', textinfo='percent+label')
-    st.plotly_chart(fig, use_container_width=True)
+    def search_by_fuzzy_matching(self, query: str, threshold: float = 52.0) -> pd.DataFrame:
+        if self._invalid_query(query):
+            return pd.DataFrame()
+        q = apply_synonyms(normalize_text(query))
+        rows_out: List[Dict[str, Any]] = []
+        for idx, row in self.database.iterrows():
+            ru, en = self._row_names(row)
+            s = self._score_query_vs_names(q, ru, en)
+            if s >= threshold:
+                d = row.to_dict()
+                d["score"] = s
+                d["index"] = idx
+                rows_out.append(d)
+        df = pd.DataFrame(rows_out)
+        if not df.empty:
+            df = df.sort_values("score", ascending=False)
+        return df
 
-def display_recipe_section(nutrition: Dict):
-    """Display recipe and ingredients in a separate section (not inside expander)."""
-    
-    st.markdown('<div class="recipe-container">', unsafe_allow_html=True)
-    st.subheader("📖 Рецепт и ингредиенты")
-    
-    # Ingredients
-    st.markdown("**🥘 Ингредиенты:**")
-    ingredients = nutrition['ingredients']
-    if isinstance(ingredients, str) and ingredients and ingredients != 'Нет списка ингредиентов':
-        if ingredients.startswith('['):
-            try:
-                import ast
-                ingredients_list = ast.literal_eval(ingredients)
-                for ing in ingredients_list:
-                    st.markdown(f"- {ing}")
-            except:
-                st.write(ingredients)
+    def search_by_token_matching(self, query: str, min_jaccard: float = 0.28) -> pd.DataFrame:
+        if self._invalid_query(query):
+            return pd.DataFrame()
+        q = apply_synonyms(normalize_text(query))
+        q_tokens = set(q.split())
+        rows_out: List[Dict[str, Any]] = []
+        for idx, row in self.database.iterrows():
+            ru, en = self._row_names(row)
+            best = 0.0
+            for name in (ru, en):
+                if not name:
+                    continue
+                nt = set(name.split())
+                if not q_tokens or not nt:
+                    continue
+                inter = len(q_tokens & nt)
+                union = len(q_tokens | nt)
+                j = inter / union if union else 0.0
+                best = max(best, j)
+            if best >= min_jaccard:
+                d = row.to_dict()
+                d["score"] = best * 100.0
+                d["index"] = idx
+                rows_out.append(d)
+        df = pd.DataFrame(rows_out)
+        if not df.empty:
+            df = df.sort_values("score", ascending=False)
+        return df
+
+    def search_by_levenshtein(self, query: str, threshold: float = 48.0) -> pd.DataFrame:
+        if self._invalid_query(query):
+            return pd.DataFrame()
+        q = apply_synonyms(normalize_text(query))
+        rows_out: List[Dict[str, Any]] = []
+        for idx, row in self.database.iterrows():
+            ru, en = self._row_names(row)
+            s = self._score_query_vs_names(q, ru, en)
+            if s >= threshold:
+                d = row.to_dict()
+                d["score"] = s
+                d["index"] = idx
+                rows_out.append(d)
+        df = pd.DataFrame(rows_out)
+        if not df.empty:
+            df = df.sort_values("score", ascending=False)
+        return df
+
+    def hybrid_search(self, query: str, top_n: int = 5) -> pd.DataFrame:
+        parts = [
+            self.search_by_fuzzy_matching(query, threshold=48),
+            self.search_by_token_matching(query, min_jaccard=0.22),
+            self.search_by_levenshtein(query, threshold=45),
+        ]
+        parts = [p for p in parts if not p.empty]
+        if not parts:
+            return pd.DataFrame()
+        combined = pd.concat(parts, ignore_index=True)
+        key = "bls_code" if "bls_code" in combined.columns else "name"
+        if key in combined.columns:
+            combined = combined.sort_values("score", ascending=False).drop_duplicates(subset=[key], keep="first")
         else:
-            st.write(ingredients)
-    else:
-        st.write("Информация об ингредиентах отсутствует")
-    
-    st.markdown("---")
-    
-    # Preparation Steps
-    st.markdown("**📋 Этапы приготовления:**")
-    recipe = nutrition['recipe']
-    if recipe and recipe != 'Нет рецепта':
-        st.write(recipe)
-    else:
-        st.write("Информация о приготовлении отсутствует")
-    
-    st.markdown('</div>', unsafe_allow_html=True)
+            combined = combined.sort_values("score", ascending=False).drop_duplicates(subset=["name"], keep="first")
+        return combined.sort_values("score", ascending=False).head(top_n)
 
-# ============================================================================
-# MAIN APPLICATION
-# ============================================================================
+    def algorithm_bundle(self, query: str) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+        """Primary hybrid table + JSON-safe summaries for all methods."""
+        hybrid = self.hybrid_search(query, top_n=5)
+        fuzzy = self.search_by_fuzzy_matching(query).head(5)
+        token = self.search_by_token_matching(query).head(5)
+        lev = self.search_by_levenshtein(query).head(5)
+
+        def pack(df: pd.DataFrame) -> List[Dict[str, Any]]:
+            if df.empty:
+                return []
+            out = []
+            for _, r in df.iterrows():
+                out.append(
+                    {
+                        "name": str(r.get("name", "")),
+                        "name_en": str(r.get("name_en", "") or ""),
+                        "score": float(r.get("score", 0)),
+                    }
+                )
+            return out
+
+        bundle = {
+            "hybrid_top5": pack(hybrid),
+            "fuzzy_top5": pack(fuzzy),
+            "token_top5": pack(token),
+            "levenshtein_top5": pack(lev),
+        }
+        return hybrid, bundle
+
+
+# -----------------------------------------------------------------------------
+# Verification (similarity thresholds, not strict equality)
+# -----------------------------------------------------------------------------
+
+USER_GEMINI_MIN = float(os.environ.get("VERIFY_USER_GEMINI_MIN", "72"))
+GEMINI_DB_MIN = float(os.environ.get("VERIFY_GEMINI_DB_MIN", "68"))
+
+
+def verification_scores(
+    user_dish: str,
+    gemini_dish: str,
+    db_name: str,
+    db_name_en: str,
+) -> Dict[str, float]:
+    u = apply_synonyms(normalize_text(user_dish))
+    g = apply_synonyms(normalize_text(gemini_dish))
+    db_ru = normalize_text(db_name)
+    db_en = normalize_text(db_name_en or "")
+    user_gemini = max(
+        float(fuzz.token_sort_ratio(u, g)),
+        float(fuzz.partial_ratio(u, g)),
+    )
+    gemini_db = 0.0
+    for dn in (db_ru, db_en):
+        if dn:
+            gemini_db = max(
+                gemini_db,
+                float(fuzz.token_sort_ratio(g, dn)),
+                float(fuzz.partial_ratio(g, dn)),
+            )
+    user_db = 0.0
+    for dn in (db_ru, db_en):
+        if dn:
+            user_db = max(
+                user_db,
+                float(fuzz.token_sort_ratio(u, dn)),
+                float(fuzz.partial_ratio(u, dn)),
+            )
+    return {
+        "user_vs_gemini": user_gemini,
+        "gemini_vs_db": gemini_db,
+        "user_vs_db": user_db,
+    }
+
+
+def is_verified(user_dish: str, gemini_dish: str, db_name: str, db_name_en: str) -> Tuple[bool, Dict[str, Any]]:
+    s = verification_scores(user_dish, gemini_dish, db_name, db_name_en)
+    ok = s["user_vs_gemini"] >= USER_GEMINI_MIN and s["gemini_vs_db"] >= GEMINI_DB_MIN
+    detail = {
+        "thresholds": {"user_vs_gemini_min": USER_GEMINI_MIN, "gemini_vs_db_min": GEMINI_DB_MIN},
+        "scores": s,
+        "verified": ok,
+    }
+    return ok, detail
+
+
+# -----------------------------------------------------------------------------
+# Gemini
+# -----------------------------------------------------------------------------
+
+
+class GeminiMealAgent:
+    def __init__(self, api_key: str):
+        import google.generativeai as genai
+
+        genai.configure(api_key=api_key)
+        self.model = genai.GenerativeModel("gemini-2.5-flash")
+
+    def analyze_meal_image_jpeg(self, jpeg_bytes: bytes) -> Dict[str, Any]:
+        try:
+            prompt = """
+            Ты распознаёшь еду на фото. Верни до 4 блюд с порцией в граммах и уверенностью 0–1.
+            Названия — на русском (можно коротко).
+            Только JSON-массив:
+            [{"dish_name": "...", "portion_grams": 200, "confidence": 0.9}]
+            Если не уверен: {"dish_name": "неизвестно", "portion_grams": 0, "confidence": 0}
+            """
+            response = self.model.generate_content(
+                [
+                    prompt,
+                    {"mime_type": "image/jpeg", "data": jpeg_bytes},
+                ]
+            )
+            text = response.text or ""
+            m = re.search(r"\[.*\]", text, re.DOTALL)
+            if m:
+                parsed = json.loads(m.group())
+            else:
+                om = re.search(r"\{.*\}", text, re.DOTALL)
+                parsed = [json.loads(om.group())] if om else []
+
+            if not isinstance(parsed, list):
+                parsed = [parsed]
+
+            dishes: List[Dict[str, Any]] = []
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                dishes.append(
+                    {
+                        "dish_name": str(item.get("dish_name", "неизвестно")),
+                        "portion_grams": float(item.get("portion_grams", 0) or 0),
+                        "confidence": float(item.get("confidence", 0) or 0),
+                    }
+                )
+            if not dishes:
+                dishes = [{"dish_name": "неизвестно", "portion_grams": 0, "confidence": 0}]
+            return {"dishes": dishes}
+        except Exception as e:
+            return {"dishes": [], "error": str(e)}
+
+
+# -----------------------------------------------------------------------------
+# Nutrition (optional display)
+# -----------------------------------------------------------------------------
+
+
+def nutrition_for_row(row: pd.Series, portion_g: float) -> Dict[str, float]:
+    base = row.get("serving_size_g", 100)
+    if pd.isna(base) or float(base) == 0:
+        base = 100.0
+    ratio = float(portion_g) / float(base)
+    return {
+        "kilocalories": float(row.get("kilocalories", 0) or 0) * ratio,
+        "protein_g": float(row.get("protein", 0) or 0) * ratio / 1000.0,
+        "fat_g": float(row.get("fat", 0) or 0) * ratio / 1000.0,
+        "carb_g": float(row.get("carbohydrate", 0) or 0) * ratio / 1000.0,
+    }
+
+
+@st.cache_data(ttl=120)
+def load_database() -> pd.DataFrame:
+    base = pathlib.Path(__file__).parent
+    df = load_database_pg()
+    if df is not None and not df.empty:
+        return df
+    return load_database_csv(base)
+
+
+def ensure_session():
+    if "user_name" not in st.session_state:
+        st.session_state.user_name = ""
+
+
+def render_match_cards(records: List[Dict[str, Any]]):
+    if not records:
+        st.warning("Нет близких совпадений в базе.")
+        return
+    for i, r in enumerate(records):
+        name = str(r.get("name", ""))
+        en = str(r.get("name_en", "") or "")
+        sc = float(r.get("score", 0))
+        extra = f" · {en}" if en else ""
+        cls = "card card-best" if i == 0 else "card"
+        label = "Лучшее совпадение" if i == 0 else "Другой вариант"
+        st.markdown(
+            f'<div class="{cls}"><strong>{label}</strong><br/>{name}{extra}<br/>'
+            f'<span class="muted">Уверенность {sc:.0f}%</span></div>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_meal_result(payload: Dict[str, Any]):
+    verified = payload["verified"]
+    user_dish = payload["user_dish"]
+    user_portion = payload["user_portion"]
+    gemini_name = payload["gemini_name"]
+    gemini_portion = payload["gemini_portion"]
+    hybrid_records: List[Dict[str, Any]] = payload["hybrid_records"]
+    dishes = payload["dishes"]
+    primary = payload["primary"]
+    algo_json = payload.get("algo_json") or {}
+
+    st.divider()
+    st.subheader("Итог")
+    badge = (
+        '<span class="badge-ok">Подтверждено</span>'
+        if verified
+        else '<span class="badge-bad">Не подтверждено</span>'
+    )
+    st.markdown(badge, unsafe_allow_html=True)
+    st.caption(
+        "Подтверждение: ваше название близко к ответу ИИ, а ответ ИИ согласуется с выбранной строкой базы "
+        f"(пороги схожести ≈ {USER_GEMINI_MIN:.0f}% / {GEMINI_DB_MIN:.0f}%)."
+    )
+
+    st.markdown("**Вы указали**")
+    st.markdown(f'<div class="card">{user_dish} · {user_portion:.0f} г</div>', unsafe_allow_html=True)
+    st.markdown("**ИИ**")
+    st.markdown(
+        f'<div class="card">{gemini_name} · {gemini_portion:.0f} г</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown("**Совпадения в базе**")
+    render_match_cards(hybrid_records)
+
+    if hybrid_records:
+        nut = nutrition_for_row(pd.Series(hybrid_records[0]), user_portion)
+        st.markdown(
+            f'<div class="card muted">Оценка КБЖУ на вашу порцию: '
+            f'{nut["kilocalories"]:.0f} ккал · Б {nut["protein_g"]:.1f} г · '
+            f'Ж {nut["fat_g"]:.1f} г · У {nut["carb_g"]:.1f} г</div>',
+            unsafe_allow_html=True,
+        )
+
+    if len(dishes) > 1:
+        with st.expander("Другие объекты на фото"):
+            for d in dishes:
+                if d is primary:
+                    continue
+                st.write(f"- {d['dish_name']} (~{d['portion_grams']:.0f} g)")
+
+    if algo_json:
+        with st.expander("Детали подбора (алгоритмы)"):
+            st.json(algo_json)
+
 
 def main():
-    # Header
-    st.markdown("""
-    <div class="main-header">
-        <h1>🍽️ AI Агент распознавания блюд</h1>
-        <p>Работает на Google Gemini Flash | Интеллектуальное распознавание еды и анализ питания</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Sidebar
-    with st.sidebar:
-        st.image("https://img.icons8.com/color/96/000000/google-gemini.png", width=80)
-        st.title("⚙️ Настройки")
-        
-        # API Key input
-        api_key = st.text_input("🔑 Ключ Google Gemini API", type="password", 
-                                help="Введите ваш ключ Google Gemini API")
-        
-        if api_key:
-            st.success("✅ Ключ API настроен")
-        else:
-            st.warning("⚠️ Пожалуйста, введите ключ Gemini API")
-        
-        st.divider()
-        
-        st.subheader("ℹ️ О приложении")
-        st.info("""
-        **Как это работает:**
-        1. 📸 Загрузите фото еды
-        2. 🤖 ИИ распознает блюдо и размер порции
-        3. 🔍 Ищет в базе данных используя нечеткое сравнение
-        4. 📊 Рассчитывает точные значения питательных веществ
-        5. 📖 Показывает рецепт и ингредиенты
-        """)
-        
-        st.divider()
-        
-        st.caption("Сделано с ❤️ используя Gemini AI")
-    
-    # Main content area
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        st.subheader("📸 Загрузите фото блюда")
-        uploaded_file = st.file_uploader("Выберите изображение...", type=['jpg', 'jpeg', 'png'])
-        
-        if uploaded_file is not None:
-            image = Image.open(uploaded_file)
-            st.image(image, caption="Загруженное блюдо", use_column_width=True)
-    
-    with col2:
-        st.subheader("⚙️ Параметры распознавания")
-        search_method = st.selectbox(
-            "Алгоритм поиска",
-            ["Гибридный (рекомендуется)", "Нечеткое совпадение", "Токенное совпадение", "Расстояние Левенштейна"]
-        )
-        
-        portion_adjustment = st.slider(
-            "Коэффициент корректировки порции",
-            min_value=0.5,
-            max_value=2.0,
-            value=1.0,
-            step=0.1,
-            help="Отрегулируйте размер порции вручную"
-        )
-    
-    # Process button
-    if uploaded_file is not None and api_key:
-        if st.button("🔍 Проанализировать блюдо", type="primary", use_container_width=True):
-            with st.spinner("🤖 ИИ агент анализирует ваше блюдо..."):
-                
-                # Step 1: Initialize AI Agent
-                gemini_agent = GeminiMealAgent(api_key)
-                
-                # Step 2: Analyze image
-                detection_result = gemini_agent.analyze_meal_image(image)
-                dishes = detection_result.get('dishes', [])
-                
-                if not dishes or dishes[0]['dish_name'] == 'неизвестно':
-                    st.error("❌ Блюда не обнаружены. Пожалуйста, попробуйте другое изображение.")
-                    return
-                
-                st.subheader("🎯 Результаты распознавания")
-                summary_rows = []
-                for item in dishes:
-                    summary_rows.append({
-                        'Блюдо': item['dish_name'].title(),
-                        'Порция (г)': int(item['portion_grams']),
-                        'Доверие': f"{item['confidence']*100:.0f}%"
-                    })
-                st.table(pd.DataFrame(summary_rows))
-                
-                # Step 3: Load database
-                database = load_database()
-                if database.empty:
-                    st.error("❌ Не удалось загрузить базу данных. Проверьте файл CSV.")
-                    return
-                
-                # Step 4: Search database for each detected dish
-                search_engine = DishSearchEngine(database)
-                calculator = NutritionCalculator()
-                
-                # Use tabs instead of nested expanders
-                if len(dishes) > 1:
-                    tabs = st.tabs([f"Блюдо {i+1}: {item['dish_name'].title()}" for i, item in enumerate(dishes)])
-                else:
-                    tabs = [None]  # No tabs for single dish
-                
-                for idx, item in enumerate(dishes):
-                    if len(dishes) > 1:
-                        current_tab = tabs[idx]
-                        with current_tab:
-                            process_single_dish(item, idx, search_method, portion_adjustment, search_engine, calculator)
-                    else:
-                        # Single dish - no tabs needed
-                        process_single_dish(item, idx, search_method, portion_adjustment, search_engine, calculator)
-                            
-    elif uploaded_file is None:
-        st.info("👈 Загрузите фото блюда, чтобы начать анализ")
-    elif not api_key:
-        st.info("🔑 Введите ключ Google Gemini API в боковой панели")
+    ensure_session()
 
-def process_single_dish(item, idx, search_method, portion_adjustment, search_engine, calculator):
-    """Process a single dish and display results."""
-    dish_name = item['dish_name']
-    adjusted_portion = item['portion_grams'] * portion_adjustment if item['portion_grams'] > 0 else 200
-    
-    col_a, col_b, col_c = st.columns(3)
-    with col_a:
-        st.metric("Определенное блюдо", dish_name.title())
-    with col_b:
-        st.metric("Порция", f"{int(adjusted_portion)} г")
-    with col_c:
-        st.metric("Доверие", f"{item['confidence']*100:.0f}%")
-    
-    # Translate search method name for function call
-    method_mapping = {
-        "Гибридный (рекомендуется)": "hybrid",
-        "Нечеткое совпадение": "fuzzy",
-        "Токенное совпадение": "token",
-        "Расстояние Левенштейна": "levenshtein"
-    }
-    
-    method = method_mapping.get(search_method, "hybrid")
-    
-    # Select search method
-    if method == "hybrid":
-        search_results = search_engine.hybrid_search(dish_name)
-    elif method == "fuzzy":
-        search_results = search_engine.search_by_fuzzy_matching(dish_name)
-    elif method == "token":
-        search_results = search_engine.search_by_token_matching(dish_name)
-    else:
-        search_results = search_engine.search_by_levenshtein(dish_name)
-    
-    if not search_results.empty:
-        best_match = search_results.iloc[0]
-        
-        st.markdown(f"""
-        <div class="match-highlight">
-            ✅ <strong>Лучшее совпадение:</strong> {best_match['name']}<br>
-            🎯 <strong>Уровень совпадения:</strong> {best_match['score']:.1f}%
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Calculate nutrition
-        nutrition = calculator.calculate_nutrition(best_match, adjusted_portion)
-        
-        st.subheader("📊 Пищевая ценность")
-        display_nutrition_card(nutrition)
-        
-        # Charts
-        col_chart1, col_chart2 = st.columns(2)
-        with col_chart1:
-            display_macros_chart(nutrition)
-        
-        with col_chart2:
-            st.subheader("💚 Показатели здоровья")
-            health_score = nutrition['health_index']
-            if health_score != 'N/A' and pd.notna(health_score):
-                try:
-                    health_val = float(health_score)
-                    st.metric("Индекс здоровья", f"{health_val}/5")
-                    
-                    # Health gauge
-                    fig = go.Figure(go.Indicator(
-                        mode="gauge+number",
-                        value=health_val,
-                        title={'text': "Оценка здоровья"},
-                        gauge={'axis': {'range': [0, 5]},
-                               'bar': {'color': "#2ecc71"},
-                               'steps': [
-                                   {'range': [0, 2], 'color': "#e74c3c"},
-                                   {'range': [2, 3.5], 'color': "#f39c12"},
-                                   {'range': [3.5, 5], 'color': "#2ecc71"}
-                               ]}
-                    ))
-                    fig.update_layout(
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        font=dict(color='white')
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                except:
-                    st.write(f"Индекс здоровья: {health_score}")
-        
-        # Display recipe section (not inside expander)
-        display_recipe_section(nutrition)
-        
-        # Alternative matches (using expander for this is fine)
-        if len(search_results) > 1:
-            with st.expander("🔄 Альтернативные совпадения"):
-                for i, match in search_results.iloc[1:].iterrows():
-                    st.markdown(f"""
-                    - **{match['name']}** (Совпадение: {match['score']:.0f}%)
-                    """)
-    else:
-        st.warning(f"⚠️ Не найдено совпадений для '{dish_name}'. Попробуйте другое изображение или измените метод поиска.")
+    st.title("Проверка блюда")
+    st.caption("Фото, что вы реально съели — сравнение с ИИ и базой Nutristeppe.")
+
+    if not st.session_state.user_name.strip():
+        name = st.text_input("Ваше имя", placeholder="Как подписывать записи", key="name_input")
+        if st.button("Далее", type="primary"):
+            if name.strip():
+                st.session_state.user_name = name.strip()
+                st.rerun()
+        return
+
+    st.markdown(
+        f'<p class="muted">Вы: <strong>{st.session_state.user_name}</strong></p>',
+        unsafe_allow_html=True,
+    )
+    if st.button("Сменить имя", key="chg"):
+        st.session_state.user_name = ""
+        st.session_state.pop("meal_result", None)
+        st.rerun()
+
+    st.subheader("Фото")
+    with st.container():
+        cam = st.camera_input("Снять камерой", help="На телефоне откроется камера или галерея.")
+    with st.container():
+        up = st.file_uploader("Или загрузить файл", type=["jpg", "jpeg", "png"])
+
+    img = image_from_upload_or_camera(up, cam)
+    if img is not None:
+        st.image(img, use_container_width=True)
+
+    st.subheader("Что вы съели")
+    user_dish = st.text_input("Название блюда", placeholder="как в реальности", key="udish")
+    user_portion = st.number_input("Порция, г", min_value=0.0, max_value=5000.0, value=200.0, step=10.0)
+
+    analyze = st.button("Анализировать", type="primary", key="go")
+
+    if analyze:
+        if img is None:
+            st.error("Сначала добавьте фото (камера или файл).")
+        elif not user_dish.strip():
+            st.error("Введите название блюда.")
+        else:
+            api_key = get_gemini_api_key()
+            if not api_key:
+                st.error("Анализ недоступен: на сервере не задан ключ API.")
+            else:
+                db = load_database()
+                if db.empty:
+                    st.error("База блюд пуста или недоступна.")
+                else:
+                    jpeg = compress_image_bytes(img)
+                    with st.spinner("Анализ фото…"):
+                        agent = GeminiMealAgent(api_key)
+                        result = agent.analyze_meal_image_jpeg(jpeg)
+
+                    if result.get("error"):
+                        st.error(f"Ошибка модели: {result['error']}")
+                    else:
+                        dishes = result.get("dishes") or []
+                        if not dishes or normalize_text(dishes[0]["dish_name"]) == normalize_text("неизвестно"):
+                            st.error("Не удалось распознать блюдо. Попробуйте другой ракурс или свет.")
+                        else:
+                            primary = max(dishes, key=lambda d: float(d.get("confidence", 0)))
+                            gemini_name = primary["dish_name"]
+                            gemini_portion = float(primary["portion_grams"] or 0)
+
+                            engine = DishSearchEngine(db)
+                            hybrid_df, algo_json = engine.algorithm_bundle(gemini_name)
+
+                            matched_name = ""
+                            matched_en = ""
+                            if not hybrid_df.empty:
+                                br = hybrid_df.iloc[0]
+                                matched_name = str(br.get("name", ""))
+                                matched_en = str(br.get("name_en", "") or "")
+
+                            verified, vdetail = is_verified(
+                                user_dish, gemini_name, matched_name, matched_en
+                            )
+
+                            saved = save_result_row(
+                                user_name=st.session_state.user_name,
+                                user_dish_name=user_dish.strip(),
+                                user_portion=float(user_portion),
+                                gemini_dish_name=gemini_name,
+                                gemini_portion=gemini_portion,
+                                matched_db_dish=matched_name,
+                                matched_db_name_en=matched_en,
+                                algorithm_results=algo_json,
+                                verification_status=verified,
+                                verification_detail=vdetail,
+                                image_jpeg=jpeg,
+                            )
+                            if saved:
+                                st.caption("Сохранено в истории.")
+                            elif os.environ.get("DATABASE_URL"):
+                                st.caption("Не удалось сохранить в историю (ошибка БД).")
+
+                            hybrid_records = (
+                                hybrid_df.to_dict("records") if not hybrid_df.empty else []
+                            )
+                            st.session_state.meal_result = {
+                                "verified": verified,
+                                "user_dish": user_dish.strip(),
+                                "user_portion": float(user_portion),
+                                "gemini_name": gemini_name,
+                                "gemini_portion": gemini_portion,
+                                "hybrid_records": hybrid_records,
+                                "dishes": dishes,
+                                "primary": primary,
+                                "algo_json": algo_json,
+                            }
+
+    res = st.session_state.get("meal_result")
+    if res is not None:
+        render_meal_result(res)
+        if st.button("Скрыть результат", key="dismiss_res"):
+            st.session_state.pop("meal_result", None)
+            st.rerun()
+
 
 if __name__ == "__main__":
     main()

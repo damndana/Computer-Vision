@@ -2,3 +2,7 @@ streamlit==1.31.1
 google-generativeai
 python-dotenv
 Pillow
+pandas
+fuzzywuzzy
+python-Levenshtein
+psycopg2-binary

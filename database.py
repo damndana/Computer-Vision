@@ -20,6 +20,7 @@ MEAL_INFO_TABLE = os.environ.get("MEAL_INFO_TABLE") or os.environ.get(
 MEAL_RESULTS_TABLE = os.environ.get("MEAL_RESULTS_TABLE") or os.environ.get(
     "RESULTS_TABLE", "results"
 )
+APP_USERS_TABLE = os.environ.get("APP_USERS_TABLE", "app_users")
 
 
 def _pg_conn():
@@ -77,6 +78,84 @@ def load_database_pg() -> Optional[pd.DataFrame]:
             pass
 
 
+def ensure_app_users_table(conn) -> None:
+    safe = APP_USERS_TABLE.replace('"', "")
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{safe}" (
+                id SERIAL PRIMARY KEY,
+                user_name TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+            """
+        )
+    conn.commit()
+
+
+def _ensure_results_user_id_column(conn) -> None:
+    safe = MEAL_RESULTS_TABLE.replace('"', "")
+    with conn.cursor() as cur:
+        cur.execute(f'ALTER TABLE "{safe}" ADD COLUMN IF NOT EXISTS user_id INTEGER;')
+    conn.commit()
+
+
+def create_app_user(user_name: str) -> Optional[int]:
+    conn = _pg_conn()
+    if conn is None:
+        return None
+    name = (user_name or "").strip()
+    if not name:
+        return None
+    try:
+        ensure_app_users_table(conn)
+        safe = APP_USERS_TABLE.replace('"', "")
+        with conn.cursor() as cur:
+            cur.execute(
+                f'INSERT INTO "{safe}" (user_name) VALUES (%s) RETURNING id',
+                (name,),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return int(row[0]) if row else None
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def get_app_user(user_id: int) -> Optional[Dict[str, Any]]:
+    conn = _pg_conn()
+    if conn is None:
+        return None
+    try:
+        ensure_app_users_table(conn)
+        safe = APP_USERS_TABLE.replace('"', "")
+        with conn.cursor() as cur:
+            cur.execute(
+                f'SELECT id, user_name FROM "{safe}" WHERE id = %s',
+                (user_id,),
+            )
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"id": int(row[0]), "user_name": str(row[1])}
+    except Exception:
+        return None
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 def load_database_csv(base_path: pathlib.Path) -> pd.DataFrame:
     csv_path = base_path / "2April.csv"
     if not csv_path.exists():
@@ -93,6 +172,7 @@ def ensure_results_table(conn) -> None:
             CREATE TABLE IF NOT EXISTS "{safe}" (
                 id SERIAL PRIMARY KEY,
                 created_at TIMESTAMPTZ DEFAULT NOW(),
+                user_id INTEGER,
                 user_name TEXT NOT NULL,
                 user_dish_name TEXT,
                 user_portion DOUBLE PRECISION,
@@ -122,24 +202,27 @@ def save_result_row(
     verification_status: bool,
     verification_detail: Dict[str, Any],
     image_jpeg: Optional[bytes],
+    user_id: Optional[int] = None,
 ) -> bool:
     conn = _pg_conn()
     if conn is None:
         return False
     try:
         ensure_results_table(conn)
+        _ensure_results_user_id_column(conn)
         safe = MEAL_RESULTS_TABLE.replace('"', "")
         with conn.cursor() as cur:
             cur.execute(
                 f"""
                 INSERT INTO "{safe}"
-                (user_name, user_dish_name, user_portion, gemini_dish_name, gemini_portion,
+                (user_name, user_id, user_dish_name, user_portion, gemini_dish_name, gemini_portion,
                  matched_db_dish, matched_db_name_en, algorithm_results, verification_status,
                  verification_detail, image_jpeg)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     user_name,
+                    user_id,
                     user_dish_name,
                     user_portion,
                     gemini_dish_name,
@@ -172,11 +255,13 @@ def fetch_all_results(limit: int = 200) -> List[Dict[str, Any]]:
     if conn is None:
         return []
     try:
+        ensure_results_table(conn)
+        _ensure_results_user_id_column(conn)
         safe = MEAL_RESULTS_TABLE.replace('"', "")
         with conn.cursor() as cur:
             cur.execute(
                 f"""
-                SELECT id, created_at, user_name, user_dish_name, user_portion,
+                SELECT id, created_at, user_id, user_name, user_dish_name, user_portion,
                        gemini_dish_name, gemini_portion, matched_db_dish, matched_db_name_en,
                        algorithm_results, verification_status, verification_detail, image_jpeg
                 FROM "{safe}"

@@ -11,7 +11,13 @@ from dotenv import load_dotenv
 from fuzzywuzzy import fuzz
 from PIL import Image
 
-from database import load_database_csv, load_database_pg, save_result_row
+from database import (
+    create_app_user,
+    get_app_user,
+    load_database_csv,
+    load_database_pg,
+    save_result_row,
+)
 from theme import image_wide, inject_theme, render_sidebar_nav
 
 load_dotenv()
@@ -25,6 +31,91 @@ st.set_page_config(
 
 inject_theme()
 render_sidebar_nav()
+
+LS_USER_ID = "nutristeppe_uid"
+LS_USER_NAME = "nutristeppe_user_name"
+
+
+def _persist_user_id_in_browser(uid: int) -> None:
+    try:
+        from streamlit_js_eval import streamlit_js_eval
+
+        streamlit_js_eval(
+            js_expressions=f'localStorage.setItem("{LS_USER_ID}", "{int(uid)}")',
+            want_output=False,
+            key="persist_uid",
+        )
+    except ImportError:
+        pass
+
+
+def _persist_user_name_in_browser(name: str) -> None:
+    try:
+        from streamlit_js_eval import streamlit_js_eval
+
+        esc = json.dumps(name)
+        streamlit_js_eval(
+            js_expressions=f'localStorage.setItem("{LS_USER_NAME}", {esc})',
+            want_output=False,
+            key="persist_uname",
+        )
+    except ImportError:
+        pass
+
+
+def _clear_browser_user_storage() -> None:
+    try:
+        from streamlit_js_eval import streamlit_js_eval
+
+        streamlit_js_eval(
+            js_expressions=(
+                f'localStorage.removeItem("{LS_USER_ID}"); '
+                f'localStorage.removeItem("{LS_USER_NAME}");'
+            ),
+            want_output=False,
+            key="clear_user_ls",
+        )
+    except ImportError:
+        pass
+
+
+def try_hydrate_user_from_browser() -> None:
+    """Restore user from localStorage + DB (same browser returns without asking name)."""
+    if st.session_state.get("user_name", "").strip():
+        return
+    try:
+        from streamlit_js_eval import streamlit_js_eval
+    except ImportError:
+        return
+
+    if os.environ.get("DATABASE_URL"):
+        uid_raw = streamlit_js_eval(
+            js_expressions=f'localStorage.getItem("{LS_USER_ID}")',
+            key="hydrate_uid",
+        )
+        if uid_raw is not None and str(uid_raw).strip().isdigit():
+            uid = int(str(uid_raw).strip())
+            row = get_app_user(uid)
+            if row:
+                st.session_state.user_id = row["id"]
+                st.session_state.user_name = row["user_name"]
+                st.rerun()
+            streamlit_js_eval(
+                js_expressions=f'localStorage.removeItem("{LS_USER_ID}")',
+                want_output=False,
+                key="drop_stale_uid",
+            )
+        return
+
+    name_raw = streamlit_js_eval(
+        js_expressions=f'localStorage.getItem("{LS_USER_NAME}")',
+        key="hydrate_name",
+    )
+    if name_raw is not None and str(name_raw).strip():
+        st.session_state.user_name = str(name_raw).strip()
+        st.session_state.user_id = None
+        st.rerun()
+
 
 # -----------------------------------------------------------------------------
 # Text normalization & synonyms (RU / EN)
@@ -389,6 +480,8 @@ def load_database() -> pd.DataFrame:
 def ensure_session():
     if "user_name" not in st.session_state:
         st.session_state.user_name = ""
+    if "user_id" not in st.session_state:
+        st.session_state.user_id = None
     if "show_camera" not in st.session_state:
         st.session_state.show_camera = False
 
@@ -468,6 +561,7 @@ def render_meal_result(payload: Dict[str, Any]):
 
 def main():
     ensure_session()
+    try_hydrate_user_from_browser()
 
     st.title("Проверка блюда")
     st.caption("Фото, что вы реально съели — сравнение с ИИ и базой Nutristeppe.")
@@ -476,7 +570,20 @@ def main():
         name = st.text_input("Ваше имя", placeholder="Как подписывать записи", key="name_input")
         if st.button("Далее", type="primary"):
             if name.strip():
-                st.session_state.user_name = name.strip()
+                nm = name.strip()
+                if os.environ.get("DATABASE_URL"):
+                    new_id = create_app_user(nm)
+                    if new_id is not None:
+                        st.session_state.user_id = new_id
+                        st.session_state.user_name = nm
+                        _persist_user_id_in_browser(new_id)
+                    else:
+                        st.session_state.user_name = nm
+                        st.warning("Не удалось сохранить профиль в базе — имя только в этой сессии.")
+                else:
+                    st.session_state.user_name = nm
+                    st.session_state.user_id = None
+                    _persist_user_name_in_browser(nm)
                 st.rerun()
         return
 
@@ -486,9 +593,11 @@ def main():
     )
     if st.button("Сменить имя", type="secondary", key="chg"):
         st.session_state.user_name = ""
+        st.session_state.user_id = None
         st.session_state.pop("meal_result", None)
         st.session_state.show_camera = False
         _clear_meal_photo()
+        _clear_browser_user_storage()
         st.rerun()
 
     st.subheader("Фото")
@@ -603,6 +712,7 @@ def main():
                                 verification_status=verified,
                                 verification_detail=vdetail,
                                 image_jpeg=jpeg,
+                                user_id=st.session_state.get("user_id"),
                             )
                             if saved:
                                 st.caption("Сохранено в истории.")

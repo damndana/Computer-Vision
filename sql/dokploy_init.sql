@@ -43,9 +43,19 @@ CREATE INDEX IF NOT EXISTS idx_trgm_name_en
 COMMENT ON TABLE database_nutristeppe IS 'Справочник блюд Nutristeppe';
 
 -- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS app_users (
+    id           SERIAL PRIMARY KEY,
+    user_name    TEXT NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_users_created ON app_users (created_at DESC);
+
+-- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS results (
     id                   SERIAL PRIMARY KEY,
     created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    user_id              INTEGER,
     user_name            TEXT NOT NULL,
     user_dish_name       TEXT,
     user_portion         DOUBLE PRECISION,
@@ -62,4 +72,5 @@ CREATE TABLE IF NOT EXISTS results (
 CREATE INDEX IF NOT EXISTS idx_results_created_at ON results (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_results_user_name ON results (user_name);
 
+COMMENT ON TABLE app_users IS 'Пользователи приложения (имя один раз, id в браузере)';
 COMMENT ON TABLE results IS 'История анализов приложения';

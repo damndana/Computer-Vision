@@ -66,7 +66,9 @@ CREATE TABLE IF NOT EXISTS results (
     algorithm_results    JSONB,
     verification_status  BOOLEAN,
     verification_detail  JSONB,
-    image_jpeg           BYTEA
+    image_jpeg           BYTEA,
+    kcal_user_portion    DOUBLE PRECISION,
+    kcal_gemini_portion  DOUBLE PRECISION
 );
 
 CREATE INDEX IF NOT EXISTS idx_results_created_at ON results (created_at DESC);

@@ -100,6 +100,18 @@ def _ensure_results_user_id_column(conn) -> None:
     conn.commit()
 
 
+def _ensure_results_kcal_columns(conn) -> None:
+    safe = MEAL_RESULTS_TABLE.replace('"', "")
+    with conn.cursor() as cur:
+        cur.execute(
+            f'ALTER TABLE "{safe}" ADD COLUMN IF NOT EXISTS kcal_user_portion DOUBLE PRECISION;'
+        )
+        cur.execute(
+            f'ALTER TABLE "{safe}" ADD COLUMN IF NOT EXISTS kcal_gemini_portion DOUBLE PRECISION;'
+        )
+    conn.commit()
+
+
 def create_app_user(user_name: str) -> Optional[int]:
     conn = _pg_conn()
     if conn is None:
@@ -183,7 +195,9 @@ def ensure_results_table(conn) -> None:
                 algorithm_results JSONB,
                 verification_status BOOLEAN,
                 verification_detail JSONB,
-                image_jpeg BYTEA
+                image_jpeg BYTEA,
+                kcal_user_portion DOUBLE PRECISION,
+                kcal_gemini_portion DOUBLE PRECISION
             );
             """
         )
@@ -203,6 +217,8 @@ def save_result_row(
     verification_detail: Dict[str, Any],
     image_jpeg: Optional[bytes],
     user_id: Optional[int] = None,
+    kcal_user_portion: Optional[float] = None,
+    kcal_gemini_portion: Optional[float] = None,
 ) -> bool:
     conn = _pg_conn()
     if conn is None:
@@ -210,6 +226,7 @@ def save_result_row(
     try:
         ensure_results_table(conn)
         _ensure_results_user_id_column(conn)
+        _ensure_results_kcal_columns(conn)
         safe = MEAL_RESULTS_TABLE.replace('"', "")
         with conn.cursor() as cur:
             cur.execute(
@@ -217,8 +234,8 @@ def save_result_row(
                 INSERT INTO "{safe}"
                 (user_name, user_id, user_dish_name, user_portion, gemini_dish_name, gemini_portion,
                  matched_db_dish, matched_db_name_en, algorithm_results, verification_status,
-                 verification_detail, image_jpeg)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 verification_detail, image_jpeg, kcal_user_portion, kcal_gemini_portion)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     user_name,
@@ -233,6 +250,8 @@ def save_result_row(
                     verification_status,
                     Json(verification_detail),
                     psycopg2.Binary(image_jpeg) if image_jpeg else None,
+                    kcal_user_portion,
+                    kcal_gemini_portion,
                 ),
             )
         conn.commit()
@@ -257,13 +276,15 @@ def fetch_all_results(limit: int = 200) -> List[Dict[str, Any]]:
     try:
         ensure_results_table(conn)
         _ensure_results_user_id_column(conn)
+        _ensure_results_kcal_columns(conn)
         safe = MEAL_RESULTS_TABLE.replace('"', "")
         with conn.cursor() as cur:
             cur.execute(
                 f"""
                 SELECT id, created_at, user_id, user_name, user_dish_name, user_portion,
                        gemini_dish_name, gemini_portion, matched_db_dish, matched_db_name_en,
-                       algorithm_results, verification_status, verification_detail, image_jpeg
+                       algorithm_results, verification_status, verification_detail, image_jpeg,
+                       kcal_user_portion, kcal_gemini_portion
                 FROM "{safe}"
                 ORDER BY created_at DESC NULLS LAST, id DESC
                 LIMIT %s

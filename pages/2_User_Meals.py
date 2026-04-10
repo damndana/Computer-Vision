@@ -18,7 +18,7 @@ inject_theme()
 render_sidebar_nav()
 
 st.title("Мои приёмы пищи")
-st.caption("История анализов (сначала новые).")
+st.caption("История анализов (сначала новые). Калории — по строке справочника, на вашу граммовку и на порцию ИИ.")
 
 if not os.environ.get("DATABASE_URL"):
     st.info("История хранится в PostgreSQL. Укажите DATABASE_URL в окружении сервера.")
@@ -69,7 +69,46 @@ for row in rows:
         if en:
             db_line = f"{db_line} ({en})"
         st.markdown(
-            f'<div class="card"><strong>База</strong><br/>{db_line}</div>',
+            '<div class="card">'
+            f"<strong>База</strong><br/>{db_line}"
+            "</div>",
             unsafe_allow_html=True,
         )
+
+        # Калории — отдельный заметный блок (главное на этой странице)
+        st.markdown("##### Калории из базы данных")
+        ku = row.get("kcal_user_portion")
+        kg = row.get("kcal_gemini_portion")
+        up = float(row.get("user_portion") or 0)
+        gp = float(row.get("gemini_portion") or 0)
+
+        k1, k2 = st.columns(2)
+        with k1:
+            if ku is not None:
+                st.metric(
+                    f"На вашу порцию ({up:.0f} г)",
+                    f"{float(ku):.0f} ккал",
+                )
+            else:
+                st.metric("На вашу порцию", "—")
+                st.caption("нет данных в записи")
+        with k2:
+            if kg is not None and gp > 0:
+                st.metric(
+                    f"На порцию ИИ ({gp:.0f} г)",
+                    f"{float(kg):.0f} ккал",
+                )
+            elif kg is not None:
+                st.metric("На порцию ИИ", f"{float(kg):.0f} ккал")
+            else:
+                st.metric("На порцию ИИ", "—")
+                st.caption("нет данных в записи")
+
+        if ku is None and kg is None:
+            st.info(
+                "Для этой записи калории не сохранены. "
+                "Так бывает у старых записей до обновления приложения или если не было совпадения в справочнике. "
+                "Сделайте новый анализ на главной — ккал появятся здесь."
+            )
+
         st.divider()

@@ -557,6 +557,31 @@ def render_meal_result(payload: Dict[str, Any]):
         f'<div class="card">{gemini_name} · {gemini_portion:.0f} г</div>',
         unsafe_allow_html=True,
     )
+
+    st.markdown("**Калории из базы**")
+    if hybrid_records:
+        ser0 = pd.Series(hybrid_records[0])
+        n_u = nutrition_for_row(ser0, user_portion)
+        n_g = (
+            nutrition_for_row(ser0, gemini_portion) if gemini_portion > 0 else None
+        )
+        m1, m2 = st.columns(2)
+        with m1:
+            st.metric(
+                f"На вашу порцию ({user_portion:.0f} г)",
+                f"{n_u['kilocalories']:.0f} ккал",
+            )
+        with m2:
+            if n_g is not None:
+                st.metric(
+                    f"На порцию ИИ ({gemini_portion:.0f} г)",
+                    f"{n_g['kilocalories']:.0f} ккал",
+                )
+            else:
+                st.metric("На порцию ИИ", "—")
+    else:
+        st.warning("Нет совпадения в базе — калории из справочника не посчитаны.")
+
     st.markdown("**Совпадения в базе**")
     render_match_cards(hybrid_records, user_portion, gemini_portion)
 
@@ -734,6 +759,22 @@ def main():
                                 user_dish, gemini_name, matched_name, matched_en
                             )
 
+                            ku: Optional[float] = None
+                            kg: Optional[float] = None
+                            if not hybrid_df.empty:
+                                brs = hybrid_df.iloc[0]
+                                ku = float(
+                                    nutrition_for_row(brs, float(user_portion))[
+                                        "kilocalories"
+                                    ]
+                                )
+                                if gemini_portion > 0:
+                                    kg = float(
+                                        nutrition_for_row(brs, gemini_portion)[
+                                            "kilocalories"
+                                        ]
+                                    )
+
                             saved = save_result_row(
                                 user_name=st.session_state.user_name,
                                 user_dish_name=user_dish.strip(),
@@ -747,6 +788,8 @@ def main():
                                 verification_detail=vdetail,
                                 image_jpeg=jpeg,
                                 user_id=st.session_state.get("user_id"),
+                                kcal_user_portion=ku,
+                                kcal_gemini_portion=kg,
                             )
                             if saved:
                                 st.caption("Сохранено в истории.")

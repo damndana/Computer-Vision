@@ -83,14 +83,22 @@ def compress_image_bytes(image: Image.Image, max_side: int = 1280, quality: int 
     return buf.getvalue()
 
 
-def image_from_upload_or_camera(
-    uploaded_file, camera_photo
-) -> Optional[Image.Image]:
-    if uploaded_file is not None:
-        return Image.open(uploaded_file).convert("RGB")
-    if camera_photo is not None:
-        return Image.open(camera_photo).convert("RGB")
-    return None
+def _meal_photo_bytes_set(img: Image.Image) -> None:
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=92)
+    st.session_state["meal_photo_bytes"] = buf.getvalue()
+
+
+def _meal_photo_image_get() -> Optional[Image.Image]:
+    raw = st.session_state.get("meal_photo_bytes")
+    if not raw:
+        return None
+    return Image.open(io.BytesIO(raw)).convert("RGB")
+
+
+def _clear_meal_photo() -> None:
+    st.session_state.pop("meal_photo_bytes", None)
+    st.session_state.pop("meal_file_uploader", None)
 
 
 # -----------------------------------------------------------------------------
@@ -381,6 +389,8 @@ def load_database() -> pd.DataFrame:
 def ensure_session():
     if "user_name" not in st.session_state:
         st.session_state.user_name = ""
+    if "show_camera" not in st.session_state:
+        st.session_state.show_camera = False
 
 
 def render_match_cards(records: List[Dict[str, Any]]):
@@ -477,15 +487,57 @@ def main():
     if st.button("Сменить имя", type="secondary", key="chg"):
         st.session_state.user_name = ""
         st.session_state.pop("meal_result", None)
+        st.session_state.show_camera = False
+        _clear_meal_photo()
         st.rerun()
 
     st.subheader("Фото")
-    with st.container():
-        cam = st.camera_input("Снять камерой", help="На телефоне откроется камера или галерея.")
-    with st.container():
-        up = st.file_uploader("Или загрузить файл", type=["jpg", "jpeg", "png"])
+    st.caption("Камера не включается сама — только после кнопки ниже (меньше расход батареи и приватность).")
 
-    img = image_from_upload_or_camera(up, cam)
+    up = st.file_uploader(
+        "Загрузить файл",
+        type=["jpg", "jpeg", "png"],
+        key="meal_file_uploader",
+        help="Фото из галереи или файлов",
+    )
+
+    if st.button("Сделать фото камерой", type="secondary", key="btn_open_cam"):
+        st.session_state.show_camera = True
+        st.rerun()
+
+    if st.session_state.show_camera:
+        st.info("Разрешите доступ к камере в браузере. Превью только здесь — после снимка окно камеры закроется.")
+        cam = st.camera_input(
+            "Камера",
+            key="widget_camera_input",
+            help="Нажмите «Take Photo» / «Снять», когда готовы.",
+        )
+        if st.button("Отмена — закрыть камеру", type="secondary", key="btn_close_cam"):
+            st.session_state.show_camera = False
+            st.session_state.pop("widget_camera_input", None)
+            st.rerun()
+        if cam is not None:
+            _meal_photo_bytes_set(Image.open(cam).convert("RGB"))
+            st.session_state.show_camera = False
+            st.session_state.pop("widget_camera_input", None)
+            st.rerun()
+
+    has_stored = bool(st.session_state.get("meal_photo_bytes"))
+    has_file = up is not None
+    if has_stored or has_file:
+        if st.button("Удалить фото", type="secondary", key="btn_clear_photo"):
+            _clear_meal_photo()
+            st.session_state.show_camera = False
+            st.session_state.pop("widget_camera_input", None)
+            st.rerun()
+
+    img: Optional[Image.Image] = None
+    if up is not None:
+        img = Image.open(up).convert("RGB")
+        st.session_state.pop("meal_photo_bytes", None)
+    else:
+        img = _meal_photo_image_get()
+
     if img is not None:
         image_wide(img)
 

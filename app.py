@@ -486,7 +486,11 @@ def ensure_session():
         st.session_state.show_camera = False
 
 
-def render_match_cards(records: List[Dict[str, Any]]):
+def render_match_cards(
+    records: List[Dict[str, Any]],
+    user_portion_g: float,
+    gemini_portion_g: float,
+):
     if not records:
         st.warning("Нет близких совпадений в базе.")
         return
@@ -497,9 +501,27 @@ def render_match_cards(records: List[Dict[str, Any]]):
         extra = f" · {en}" if en else ""
         cls = "card card-best" if i == 0 else "card"
         label = "Лучшее совпадение" if i == 0 else "Другой вариант"
+        ser = pd.Series(r)
+        nut_u = nutrition_for_row(ser, user_portion_g)
+        nut_g = nutrition_for_row(ser, gemini_portion_g) if gemini_portion_g > 0 else None
+        ref_kcal = float(r.get("kilocalories", 0) or 0)
+        ref_g = float(r.get("serving_size_g", 100) or 100)
+        if ref_g <= 0:
+            ref_g = 100.0
+        kcal_ai_line = ""
+        if nut_g is not None:
+            kcal_ai_line = (
+                f'<br/><span class="muted">Ккал по базе на порцию ИИ ({gemini_portion_g:.0f} г): '
+                f'<strong>{nut_g["kilocalories"]:.0f}</strong></span>'
+            )
         st.markdown(
             f'<div class="{cls}"><strong>{label}</strong><br/>{name}{extra}<br/>'
-            f'<span class="muted">Уверенность {sc:.0f}%</span></div>',
+            f'<span class="muted">Уверенность {sc:.0f}%</span>'
+            f'<br/><span class="muted">Ккал по базе на вашу порцию ({user_portion_g:.0f} г): '
+            f'<strong>{nut_u["kilocalories"]:.0f}</strong></span>'
+            f"{kcal_ai_line}"
+            f'<br/><span class="muted">Эталон в базе: {ref_kcal:.0f} ккал / {ref_g:.0f} г</span>'
+            f"</div>",
             unsafe_allow_html=True,
         )
 
@@ -536,16 +558,28 @@ def render_meal_result(payload: Dict[str, Any]):
         unsafe_allow_html=True,
     )
     st.markdown("**Совпадения в базе**")
-    render_match_cards(hybrid_records)
+    render_match_cards(hybrid_records, user_portion, gemini_portion)
 
     if hybrid_records:
         nut = nutrition_for_row(pd.Series(hybrid_records[0]), user_portion)
-        st.markdown(
-            f'<div class="card muted">Оценка КБЖУ на вашу порцию: '
-            f'{nut["kilocalories"]:.0f} ккал · Б {nut["protein_g"]:.1f} г · '
-            f'Ж {nut["fat_g"]:.1f} г · У {nut["carb_g"]:.1f} г</div>',
-            unsafe_allow_html=True,
+        nut_ai = (
+            nutrition_for_row(pd.Series(hybrid_records[0]), gemini_portion)
+            if gemini_portion > 0
+            else None
         )
+        macro = (
+            f'<div class="card muted"><strong>БЖУ по лучшему совпадению</strong><br/>'
+            f'Ваша порция: {nut["kilocalories"]:.0f} ккал · Б {nut["protein_g"]:.1f} г · '
+            f'Ж {nut["fat_g"]:.1f} г · У {nut["carb_g"]:.1f} г'
+        )
+        if nut_ai is not None:
+            macro += (
+                f'<br/>Порция ИИ: {nut_ai["kilocalories"]:.0f} ккал · '
+                f'Б {nut_ai["protein_g"]:.1f} г · Ж {nut_ai["fat_g"]:.1f} г · '
+                f'У {nut_ai["carb_g"]:.1f} г'
+            )
+        macro += "</div>"
+        st.markdown(macro, unsafe_allow_html=True)
 
     if len(dishes) > 1:
         with st.expander("Другие объекты на фото"):

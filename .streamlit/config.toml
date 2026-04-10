@@ -7,6 +7,13 @@ headless = true
 address = "0.0.0.0"
 enableXsrfProtection = false
 enableWebsocketCompression = false
+enableCORS = true
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false
+
+# Visible in Dokploy logs when level is debug (see Dockerfile entrypoint).
+[logger]
+level = "debug"
+messageFormat = "%(asctime)s %(levelname)s %(name)s - %(message)s"

@@ -1,7 +1,12 @@
-# Docker / Traefik: listen on all interfaces (do not use 172.18.x.x from your PC — use Dokploy HTTPS domain).
+# Docker / Traefik (Dokploy): listen on all interfaces.
+# If the page shows only skeleton loaders forever, WebSocket to /_stcore/stream is failing.
+# Behind our own HTTPS proxy, XSRF cookies often break the WS handshake — disable here.
+# Risk: only safe if Traefik is your TLS terminator and you trust the deployment network.
 [server]
 headless = true
 address = "0.0.0.0"
+enableXsrfProtection = false
+enableWebsocketCompression = false
 
 [browser]
 gatherUsageStats = false

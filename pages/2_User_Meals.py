@@ -5,7 +5,7 @@ import streamlit as st
 from PIL import Image
 
 from database import fetch_all_results
-from theme import inject_theme, render_sidebar_nav
+from theme import image_wide, inject_theme, render_sidebar_nav
 
 st.set_page_config(
     page_title="Мои приёмы пищи",
@@ -46,7 +46,7 @@ for row in rows:
 
         if img_bytes:
             try:
-                st.image(Image.open(io.BytesIO(img_bytes)), use_container_width=True)
+                image_wide(Image.open(io.BytesIO(img_bytes)))
             except Exception:
                 st.caption("(Изображение недоступно)")
 

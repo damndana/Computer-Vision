@@ -3,6 +3,14 @@
 import streamlit as st
 
 
+def image_wide(image, **kwargs):
+    """st.image full width: works on Streamlit with use_container_width or older use_column_width."""
+    try:
+        st.image(image, use_container_width=True, **kwargs)
+    except TypeError:
+        st.image(image, use_column_width=True, **kwargs)
+
+
 MOBILE_CSS = """
 <style>
   :root {
@@ -237,7 +245,7 @@ def inject_theme():
     st.markdown(MOBILE_CSS, unsafe_allow_html=True)
 
 
-def render_sidebar_nav():
+def render_sidebar_nav() -> None:
     with st.sidebar:
         st.markdown('<p class="nav-title">Меню</p>', unsafe_allow_html=True)
         st.page_link("app.py", label="Проверка блюда", icon="🍽️")

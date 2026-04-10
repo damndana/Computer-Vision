@@ -12,7 +12,7 @@ from fuzzywuzzy import fuzz
 from PIL import Image
 
 from database import load_database_csv, load_database_pg, save_result_row
-from theme import inject_theme, render_sidebar_nav
+from theme import image_wide, inject_theme, render_sidebar_nav
 
 load_dotenv()
 
@@ -487,7 +487,7 @@ def main():
 
     img = image_from_upload_or_camera(up, cam)
     if img is not None:
-        st.image(img, use_container_width=True)
+        image_wide(img)
 
     st.subheader("Что вы съели")
     user_dish = st.text_input("Название блюда", placeholder="как в реальности", key="udish")

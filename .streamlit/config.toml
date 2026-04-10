@@ -1,0 +1,7 @@
+# Docker / Traefik: listen on all interfaces (do not use 172.18.x.x from your PC — use Dokploy HTTPS domain).
+[server]
+headless = true
+address = "0.0.0.0"
+
+[browser]
+gatherUsageStats = false

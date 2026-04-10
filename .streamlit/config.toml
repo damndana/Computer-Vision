@@ -13,6 +13,14 @@ fileWatcherType = "none"
 [browser]
 gatherUsageStats = false
 
+[theme]
+base = "light"
+primaryColor = "#0f766e"
+backgroundColor = "#f4f3f0"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#1c1917"
+font = "sans serif"
+
 # Visible in Dokploy logs when level is debug (see Dockerfile entrypoint).
 [logger]
 level = "debug"

@@ -5,68 +5,230 @@ import streamlit as st
 
 MOBILE_CSS = """
 <style>
+  :root {
+    --bg: #f4f3f0;
+    --surface: #ffffff;
+    --text: #1c1917;
+    --text-muted: #57534e;
+    --border: #e7e5e4;
+    --accent: #0f766e;
+    --accent-hover: #0d9488;
+    --accent-text: #ffffff;
+    --radius: 14px;
+    --shadow: 0 1px 2px rgba(28, 25, 23, 0.06);
+  }
+
   html, body, [data-testid="stAppViewContainer"] {
     overflow-x: hidden;
   }
+
+  .stApp {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+    background: var(--bg) !important;
+    color: var(--text) !important;
+  }
+
   .block-container {
     max-width: 28rem !important;
-    padding-top: 0.75rem !important;
+    padding-top: 1rem !important;
     padding-bottom: 3rem !important;
-    padding-left: 1rem !important;
-    padding-right: 1rem !important;
+    padding-left: 1.1rem !important;
+    padding-right: 1.1rem !important;
   }
   @media (min-width: 640px) {
     .block-container { max-width: 36rem !important; }
   }
-  .stApp {
-    background: #f7f7f5 !important;
-    color: #1a1a1a !important;
+
+  /* Main text — only outside interactive controls (fixes invisible button labels) */
+  .stApp h1, .stApp h2, .stApp h3, .stApp h4 {
+    color: var(--text) !important;
+    font-weight: 600 !important;
+    letter-spacing: -0.02em !important;
   }
-  .stApp, .stApp p, .stApp span, .stApp label {
-    color: #1a1a1a !important;
+  .stCaption, [data-testid="stCaptionContainer"] {
+    color: var(--text-muted) !important;
   }
-  h1, h2, h3 { color: #111 !important; font-weight: 600 !important; letter-spacing: -0.02em; }
+  [data-testid="stMarkdownContainer"] p,
+  [data-testid="stMarkdownContainer"] li,
+  .stMarkdown p {
+    color: var(--text) !important;
+  }
+
+  /* ----- Buttons: force label contrast on ALL nested nodes ----- */
   .stButton > button {
     width: 100%;
-    min-height: 3.25rem;
-    font-size: 1.05rem !important;
+    min-height: 3.1rem;
+    font-family: inherit !important;
+    font-size: 1rem !important;
     font-weight: 600 !important;
-    border-radius: 14px !important;
+    border-radius: var(--radius) !important;
+    box-shadow: var(--shadow);
+    transition: background 0.2s ease, transform 0.15s ease, box-shadow 0.2s ease !important;
+  }
+
+  /* Primary */
+  .stButton > button[kind="primary"],
+  .stButton > button[data-testid="baseButton-primary"] {
+    background: linear-gradient(180deg, var(--accent-hover) 0%, var(--accent) 100%) !important;
     border: none !important;
-    background: #1a1a1a !important;
-    color: #fff !important;
-    transition: transform 0.15s ease, opacity 0.15s ease;
+    color: var(--accent-text) !important;
   }
-  .stButton > button:hover { opacity: 0.92; transform: scale(1.01); }
-  div[data-testid="stFileUploader"] section {
-    padding: 1.25rem !important;
-    border-radius: 16px !important;
-    border: 1px dashed #c8c8c4 !important;
-    background: #fff !important;
+  .stButton > button[kind="primary"] *,
+  .stButton > button[data-testid="baseButton-primary"] * {
+    color: var(--accent-text) !important;
   }
+  .stButton > button[kind="primary"]:hover,
+  .stButton > button[data-testid="baseButton-primary"]:hover {
+    box-shadow: 0 4px 14px rgba(15, 118, 110, 0.35) !important;
+    transform: translateY(-1px);
+  }
+
+  /* Secondary / default — light surface, dark readable text */
+  .stButton > button[kind="secondary"],
+  .stButton > button[data-testid="baseButton-secondary"] {
+    background: var(--surface) !important;
+    border: 1.5px solid var(--border) !important;
+    color: var(--text) !important;
+    box-shadow: var(--shadow) !important;
+  }
+  .stButton > button[kind="secondary"] *,
+  .stButton > button[data-testid="baseButton-secondary"] * {
+    color: var(--text) !important;
+  }
+  .stButton > button[kind="secondary"]:hover,
+  .stButton > button[data-testid="baseButton-secondary"]:hover {
+    border-color: #d6d3d1 !important;
+    background: #fafaf9 !important;
+  }
+
+  /* Fallback if kind attribute missing */
+  .stButton > button:not([kind="primary"]):not([data-testid="baseButton-primary"]) {
+    background: var(--surface) !important;
+    border: 1.5px solid var(--border) !important;
+    color: var(--text) !important;
+  }
+  .stButton > button:not([kind="primary"]):not([data-testid="baseButton-primary"]) * {
+    color: var(--text) !important;
+  }
+
+  /* Labels for inputs */
+  .stTextInput label, .stNumberInput label,
+  .stCameraInput label, .stFileUploader label,
+  label[data-testid="stWidgetLabel"] p {
+    color: var(--text) !important;
+    font-weight: 500 !important;
+  }
+
   .stTextInput input, .stNumberInput input {
     border-radius: 12px !important;
-    min-height: 2.75rem !important;
+    min-height: 2.85rem !important;
     font-size: 1rem !important;
+    border: 1px solid var(--border) !important;
+    background: var(--surface) !important;
+    color: var(--text) !important;
   }
-  .card {
-    background: #fff;
-    border-radius: 16px;
-    padding: 1rem 1.1rem;
-    margin: 0.5rem 0;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-    border: 1px solid #e8e8e4;
+
+  div[data-testid="stFileUploader"] section {
+    padding: 1.25rem !important;
+    border-radius: var(--radius) !important;
+    border: 2px dashed #d6d3d1 !important;
+    background: var(--surface) !important;
   }
-  .card-best { border-color: #2d6a4f; box-shadow: 0 0 0 2px rgba(45,106,79,0.15); }
-  .muted { color: #5c5c58 !important; font-size: 0.9rem; }
-  .badge-ok { display:inline-block; padding:0.35rem 0.65rem; border-radius:999px; background:#d8f3dc; color:#1b4332; font-weight:600; font-size:0.9rem; }
-  .badge-bad { display:inline-block; padding:0.35rem 0.65rem; border-radius:999px; background:#ffccd5; color:#7f1d1d; font-weight:600; font-size:0.9rem; }
+  div[data-testid="stFileUploader"] section small,
+  div[data-testid="stFileUploader"] [data-testid="stFileUploaderDropzone"] * {
+    color: var(--text-muted) !important;
+  }
+
+  [data-testid="stCameraInput"] > div {
+    border-radius: var(--radius) !important;
+    overflow: hidden;
+    border: 1px solid var(--border) !important;
+  }
+
+  /* Sidebar nav links */
   section[data-testid="stSidebar"] {
-    background: #fafaf8 !important;
-    border-right: 1px solid #e8e8e4 !important;
+    background: var(--surface) !important;
+    border-right: 1px solid var(--border) !important;
   }
+  [data-testid="stSidebarNavLink"] {
+    border-radius: 12px !important;
+    color: var(--text) !important;
+  }
+  [data-testid="stSidebarNavLink"] span {
+    color: var(--text) !important;
+  }
+  [data-testid="stSidebarNavLink"]:hover {
+    background: var(--bg) !important;
+  }
+
   div[data-testid="stSidebarUserContent"] { padding-top: 0.5rem; }
-  .nav-title { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: #888 !important; margin-bottom: 0.5rem; }
+  .nav-title {
+    font-size: 0.7rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.1em !important;
+    color: var(--text-muted) !important;
+    margin-bottom: 0.5rem !important;
+  }
+
+  .card {
+    background: var(--surface);
+    border-radius: var(--radius);
+    padding: 1rem 1.15rem;
+    margin: 0.5rem 0;
+    box-shadow: var(--shadow);
+    border: 1px solid var(--border);
+  }
+  .card-best {
+    border-color: #0f766e;
+    box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.12);
+  }
+  .muted { color: var(--text-muted) !important; font-size: 0.9rem; }
+  .badge-ok {
+    display: inline-block;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: #ccfbf1;
+    color: #115e59;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .badge-bad {
+    display: inline-block;
+    padding: 0.35rem 0.75rem;
+    border-radius: 999px;
+    background: #ffe4e6;
+    color: #9f1239;
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.25rem 0;
+  }
+
+  /* Dividers Streamlit */
+  [data-testid="stHorizontalBlock"] + hr,
+  .stDivider {
+    background-color: var(--border) !important;
+  }
+
+  /* Expander */
+  .streamlit-expanderHeader {
+    background: var(--surface) !important;
+    border-radius: 12px !important;
+    border: 1px solid var(--border) !important;
+    color: var(--text) !important;
+  }
+  .streamlit-expanderHeader svg {
+    fill: var(--text) !important;
+  }
+
+  /* Spinner */
+  [data-testid="stSpinner"] {
+    color: var(--accent) !important;
+  }
 </style>
 """
 

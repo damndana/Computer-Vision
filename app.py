@@ -474,7 +474,7 @@ def main():
         f'<p class="muted">Вы: <strong>{st.session_state.user_name}</strong></p>',
         unsafe_allow_html=True,
     )
-    if st.button("Сменить имя", key="chg"):
+    if st.button("Сменить имя", type="secondary", key="chg"):
         st.session_state.user_name = ""
         st.session_state.pop("meal_result", None)
         st.rerun()
@@ -575,7 +575,7 @@ def main():
     res = st.session_state.get("meal_result")
     if res is not None:
         render_meal_result(res)
-        if st.button("Скрыть результат", key="dismiss_res"):
+        if st.button("Скрыть результат", type="secondary", key="dismiss_res"):
             st.session_state.pop("meal_result", None)
             st.rerun()
 

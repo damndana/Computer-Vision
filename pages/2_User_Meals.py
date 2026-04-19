@@ -1,5 +1,7 @@
 import io
+import json
 import os
+from typing import Dict, List
 
 import streamlit as st
 from PIL import Image
@@ -29,6 +31,20 @@ if not rows:
     st.write("Пока нет записей. Сначала сделайте анализ на главной странице.")
     st.stop()
 
+def _algo_dict(row: Dict[str, Any]) -> Dict[str, Any]:
+    raw = row.get("algorithm_results")
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
 for row in rows:
     created = row.get("created_at")
     if hasattr(created, "strftime"):
@@ -39,6 +55,9 @@ for row in rows:
     ok = row.get("verification_status")
     badge = "✅ Подтверждено" if ok else "❌ Не подтверждено"
     img_bytes = row.get("image_jpeg")
+    algo = _algo_dict(row)
+    meal_items: List[Dict[str, Any]] = algo.get("meal_items") or []
+    multi_saved = bool(algo.get("multi_plate")) and isinstance(meal_items, list) and len(meal_items) >= 2
 
     with st.container():
         st.markdown(f"#### {row.get('user_name', '')} · {ts}")
@@ -64,6 +83,23 @@ for row in rows:
             "</div>",
             unsafe_allow_html=True,
         )
+        if multi_saved:
+            with st.expander("Несколько блюд на снимке (сохранённый разбор)"):
+                for i, it in enumerate(meal_items):
+                    if not isinstance(it, dict):
+                        continue
+                    role = str(it.get("role") or "—")
+                    gnm = str(it.get("gemini_name") or "—")
+                    gp = float(it.get("gemini_portion") or 0)
+                    ua = float(it.get("user_portion_allocated") or 0)
+                    vr = "✅" if it.get("verified") else "❌"
+                    st.markdown(
+                        f"**{i + 1}.** {role} · {gnm} · ИИ ~{gp:.0f} г · "
+                        f"ваша доля ~{ua:.0f} г {vr}"
+                    )
+                    rs = str(it.get("reasoning") or "").strip()
+                    if rs:
+                        st.caption(rs[:280] + ("…" if len(rs) > 280 else ""))
         en = row.get("matched_db_name_en") or ""
         db_line = row.get("matched_db_dish") or "—"
         if en:

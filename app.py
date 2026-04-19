@@ -301,11 +301,46 @@ class DishSearchEngine:
         if not parts:
             return pd.DataFrame()
         combined = pd.concat(parts, ignore_index=True)
-        key = "bls_code" if "bls_code" in combined.columns else "name"
+        if "id" in combined.columns:
+            key = "id"
+        elif "bls_code" in combined.columns:
+            key = "bls_code"
+        else:
+            key = "name"
         if key in combined.columns:
             combined = combined.sort_values("score", ascending=False).drop_duplicates(subset=[key], keep="first")
         else:
             combined = combined.sort_values("score", ascending=False).drop_duplicates(subset=["name"], keep="first")
+        return combined.sort_values("score", ascending=False).head(top_n)
+
+    def top_candidates_for_seed(self, seed: str, top_n: int = 20) -> pd.DataFrame:
+        """Broad text retrieval for constrained visual selection (no embeddings in-app)."""
+        if self._invalid_query(seed):
+            return pd.DataFrame()
+        wide_parts = [
+            self.search_by_fuzzy_matching(seed, threshold=52).head(top_n * 2),
+            self.search_by_fuzzy_matching(seed, threshold=42).head(top_n * 2),
+            self.search_by_fuzzy_matching(seed, threshold=35).head(top_n * 3),
+            self.search_by_token_matching(seed, min_jaccard=0.22).head(top_n * 2),
+            self.search_by_token_matching(seed, min_jaccard=0.15).head(top_n * 3),
+            self.search_by_token_matching(seed, min_jaccard=0.10).head(top_n * 4),
+            self.search_by_levenshtein(seed, threshold=45).head(top_n * 2),
+            self.search_by_levenshtein(seed, threshold=38).head(top_n * 3),
+            self.search_by_levenshtein(seed, threshold=32).head(top_n * 4),
+        ]
+        parts = [p for p in wide_parts if not p.empty]
+        if not parts:
+            return pd.DataFrame()
+        combined = pd.concat(parts, ignore_index=True)
+        if "id" in combined.columns:
+            dedup_key = "id"
+        elif "bls_code" in combined.columns:
+            dedup_key = "bls_code"
+        else:
+            dedup_key = "name"
+        combined = combined.sort_values("score", ascending=False).drop_duplicates(
+            subset=[dedup_key], keep="first"
+        )
         return combined.sort_values("score", ascending=False).head(top_n)
 
     def algorithm_bundle(self, query: str) -> Tuple[pd.DataFrame, Dict[str, Any]]:
@@ -394,6 +429,197 @@ def is_verified(user_dish: str, gemini_dish: str, db_name: str, db_name_en: str)
     return ok, detail
 
 
+def row_candidate_id(row: pd.Series) -> int:
+    """Stable integer id for prompt / JSON (DB id preferred, else dataframe index from search)."""
+    rid = row.get("id")
+    if rid is not None and not (isinstance(rid, float) and pd.isna(rid)):
+        try:
+            return int(rid)
+        except (TypeError, ValueError):
+            pass
+    idx = row.get("index")
+    if idx is not None and not (isinstance(idx, float) and pd.isna(idx)):
+        try:
+            return int(idx)
+        except (TypeError, ValueError):
+            pass
+    h = abs(hash(str(row.get("name", "")))) % (10**9 - 1)
+    return h if h > 0 else 1
+
+
+def _candidate_description(row: pd.Series) -> str:
+    chunks: List[str] = []
+    for col in ("ingredients", "description", "steps", "recipe"):
+        v = row.get(col)
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            continue
+        s = str(v).strip()
+        if s:
+            chunks.append(s)
+    return (" ".join(chunks))[:420]
+
+
+def build_candidate_list(df: pd.DataFrame) -> str:
+    lines: List[str] = []
+    for _, row in df.iterrows():
+        cid = row_candidate_id(row)
+        name_ru = str(row.get("name", "") or "")
+        name_en = str(row.get("name_en", "") or "")
+        desc = _candidate_description(row)
+        lines.append(f"{cid} | {name_ru} | {name_en}\ndescription: {desc}")
+    return "\n\n".join(lines)
+
+
+MEAL_SELECTION_PROMPT_TEMPLATE = """You are a professional food recognition assistant.
+
+Your task is to analyze the meal shown in the image and match it to the MOST PROBABLE dish from the provided database candidates.
+
+IMPORTANT RULES:
+
+1. You MUST choose ONLY from the provided candidate dishes.
+2. Do NOT invent new dish names.
+3. If none of the candidates match the image well, return "unknown".
+4. Focus on:
+   - main ingredients
+   - cooking style
+   - visible structure of the food
+   - sauce presence
+   - shape (pasta, salad, soup, etc.)
+5. Ignore plate decorations, lighting, or camera angle.
+
+The image may contain multiple foods. Choose the MAIN dish.
+
+If two dishes are visually similar, prefer the one that contains the ingredients that are clearly visible in the image.
+
+Confidence guidelines:
+0.9–1.0 = almost certain
+0.7–0.9 = likely match
+0.4–0.7 = possible match
+0–0.4 = low confidence
+
+--------------------------------------------------
+
+DATABASE CANDIDATE MEALS:
+
+{CANDIDATE_LIST}
+
+Each candidate contains:
+- id
+- name_ru
+- name_en
+- description (ingredients or short description)
+
+--------------------------------------------------
+
+TASK:
+
+1. Analyze the image carefully.
+2. Compare the visible food with the candidate dishes.
+3. Choose the best matching candidate.
+
+--------------------------------------------------
+
+Return ONLY valid JSON in the following format:
+
+{
+  "selected_meal_id": integer or null,
+  "selected_meal_name": "string",
+  "confidence": number between 0 and 1,
+  "visible_ingredients": ["ingredient1","ingredient2","ingredient3"],
+  "reasoning": "short explanation why this candidate matches the image"
+}
+
+If none of the candidates match the image:
+
+{
+  "selected_meal_id": null,
+  "selected_meal_name": "unknown",
+  "confidence": 0,
+  "visible_ingredients": [],
+  "reasoning": "no candidate matches the image"
+}
+
+Return ONLY JSON. No extra text.
+"""
+
+
+def _gemini_generation_config_json() -> Any:
+    import google.generativeai as genai
+
+    try:
+        return genai.GenerationConfig(
+            temperature=0.2,
+            response_mime_type="application/json",
+        )
+    except Exception:
+        pass
+    try:
+        from google.generativeai.types import GenerationConfig
+
+        return GenerationConfig(
+            temperature=0.2,
+            response_mime_type="application/json",
+        )
+    except Exception:
+        return {"temperature": 0.2, "response_mime_type": "application/json"}
+
+
+def _parse_json_object_from_model_text(text: str) -> Optional[Dict[str, Any]]:
+    if not text:
+        return None
+    t = text.strip()
+    if t.startswith("```"):
+        t = re.sub(r"^```[a-zA-Z]*\s*", "", t)
+        t = re.sub(r"\s*```$", "", t).strip()
+    try:
+        obj = json.loads(t)
+        return obj if isinstance(obj, dict) else None
+    except json.JSONDecodeError:
+        m = re.search(r"\{[\s\S]*\}", t)
+        if m:
+            try:
+                obj = json.loads(m.group())
+                return obj if isinstance(obj, dict) else None
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def find_candidate_row_by_id(candidates_df: pd.DataFrame, meal_id: Any) -> Optional[pd.Series]:
+    if candidates_df.empty or meal_id is None:
+        return None
+    try:
+        mid = int(meal_id)
+    except (TypeError, ValueError):
+        return None
+    for _, row in candidates_df.iterrows():
+        if row_candidate_id(row) == mid:
+            return row
+    return None
+
+
+def reorder_candidate_records(
+    candidates_df: pd.DataFrame,
+    selected: Optional[pd.Series],
+) -> List[Dict[str, Any]]:
+    if candidates_df.empty:
+        return []
+    recs = candidates_df.to_dict("records")
+    if selected is None:
+        return recs
+    sid = row_candidate_id(selected)
+    hit: Optional[Dict[str, Any]] = None
+    rest: List[Dict[str, Any]] = []
+    for r in recs:
+        if row_candidate_id(pd.Series(r)) == sid:
+            hit = r
+        else:
+            rest.append(r)
+    if hit is None:
+        return recs
+    return [hit] + rest
+
+
 # -----------------------------------------------------------------------------
 # Gemini
 # -----------------------------------------------------------------------------
@@ -406,48 +632,83 @@ class GeminiMealAgent:
         genai.configure(api_key=api_key)
         self.model = genai.GenerativeModel("gemini-2.5-flash")
 
-    def analyze_meal_image_jpeg(self, jpeg_bytes: bytes) -> Dict[str, Any]:
+    def select_meal_from_candidates(
+        self, jpeg_bytes: bytes, candidates_df: pd.DataFrame
+    ) -> Dict[str, Any]:
         try:
-            prompt = """
-            Ты распознаёшь еду на фото. Верни до 4 блюд с порцией в граммах и уверенностью 0–1.
-            Названия — на русском (можно коротко).
-            Только JSON-массив:
-            [{"dish_name": "...", "portion_grams": 200, "confidence": 0.9}]
-            Если не уверен: {"dish_name": "неизвестно", "portion_grams": 0, "confidence": 0}
-            """
+            if candidates_df.empty:
+                return {"error": "empty_candidates"}
+            clist = build_candidate_list(candidates_df)
+            prompt = MEAL_SELECTION_PROMPT_TEMPLATE.replace("{CANDIDATE_LIST}", clist)
+            gcfg = _gemini_generation_config_json()
             response = self.model.generate_content(
                 [
                     prompt,
                     {"mime_type": "image/jpeg", "data": jpeg_bytes},
-                ]
+                ],
+                generation_config=gcfg,
             )
-            text = response.text or ""
-            m = re.search(r"\[.*\]", text, re.DOTALL)
-            if m:
-                parsed = json.loads(m.group())
-            else:
-                om = re.search(r"\{.*\}", text, re.DOTALL)
-                parsed = [json.loads(om.group())] if om else []
-
-            if not isinstance(parsed, list):
-                parsed = [parsed]
-
-            dishes: List[Dict[str, Any]] = []
-            for item in parsed:
-                if not isinstance(item, dict):
-                    continue
-                dishes.append(
-                    {
-                        "dish_name": str(item.get("dish_name", "неизвестно")),
-                        "portion_grams": float(item.get("portion_grams", 0) or 0),
-                        "confidence": float(item.get("confidence", 0) or 0),
-                    }
-                )
-            if not dishes:
-                dishes = [{"dish_name": "неизвестно", "portion_grams": 0, "confidence": 0}]
-            return {"dishes": dishes}
+            text = getattr(response, "text", None) or ""
+            parsed = _parse_json_object_from_model_text(text)
+            if not parsed:
+                return {"error": "invalid_json", "raw": text[:800]}
+            return {"selection": parsed}
         except Exception as e:
-            return {"dishes": [], "error": str(e)}
+            return {"error": str(e)}
+
+    def estimate_portion_jpeg(self, jpeg_bytes: bytes, dish_context_ru: str) -> Dict[str, Any]:
+        try:
+            dish_context_ru = (dish_context_ru or "").strip() or "блюдо"
+            prompt = (
+                f"Оцени массу основной порции на фото в граммах. Контекст блюда: {dish_context_ru}.\n"
+                'Верни ТОЛЬКО JSON: {"portion_grams": число} — одна оценка.'
+            )
+            gcfg = _gemini_generation_config_json()
+            response = self.model.generate_content(
+                [
+                    prompt,
+                    {"mime_type": "image/jpeg", "data": jpeg_bytes},
+                ],
+                generation_config=gcfg,
+            )
+            text = getattr(response, "text", None) or ""
+            parsed = _parse_json_object_from_model_text(text)
+            if not parsed:
+                return {"portion_grams": 0.0, "error": "invalid_json"}
+            pg = float(parsed.get("portion_grams", 0) or 0)
+            return {"portion_grams": pg}
+        except Exception as e:
+            return {"portion_grams": 0.0, "error": str(e)}
+
+    def verify_ingredient_consistency(
+        self,
+        dish_ru: str,
+        dish_en: str,
+        ingredients_expected: str,
+        visible_ingredients: List[str],
+    ) -> Dict[str, Any]:
+        try:
+            vis = ", ".join(visible_ingredients or [])
+            prompt = (
+                "Is this dish consistent with the visible ingredients?\n\n"
+                f"Dish (RU): {dish_ru}\n"
+                f"Dish (EN): {dish_en}\n"
+                f"Ingredients expected (from reference): {ingredients_expected}\n"
+                f"Visible ingredients (from image analysis): {vis}\n\n"
+                'Return ONLY JSON: {"consistent": true or false, "confidence": number between 0 and 1}'
+            )
+            gcfg = _gemini_generation_config_json()
+            response = self.model.generate_content(prompt, generation_config=gcfg)
+            text = getattr(response, "text", None) or ""
+            parsed = _parse_json_object_from_model_text(text)
+            if not parsed:
+                return {"consistent": True, "confidence": 0.5, "error": "invalid_json"}
+            return {
+                "consistent": bool(parsed.get("consistent", True)),
+                "confidence": float(parsed.get("confidence", 0) or 0),
+            }
+        except Exception as e:
+            return {"consistent": True, "confidence": 0.0, "error": str(e)}
 
 
 # -----------------------------------------------------------------------------
@@ -490,6 +751,7 @@ def render_match_cards(
     records: List[Dict[str, Any]],
     user_portion_g: float,
     gemini_portion_g: float,
+    first_label: str = "Лучшее совпадение",
 ):
     if not records:
         st.warning("Нет близких совпадений в базе.")
@@ -500,7 +762,7 @@ def render_match_cards(
         sc = float(r.get("score", 0))
         extra = f" · {en}" if en else ""
         cls = "card card-best" if i == 0 else "card"
-        label = "Лучшее совпадение" if i == 0 else "Другой вариант"
+        label = first_label if i == 0 else "Другой вариант"
         ser = pd.Series(r)
         nut_u = nutrition_for_row(ser, user_portion_g)
         nut_g = nutrition_for_row(ser, gemini_portion_g) if gemini_portion_g > 0 else None
@@ -536,6 +798,7 @@ def render_meal_result(payload: Dict[str, Any]):
     dishes = payload["dishes"]
     primary = payload["primary"]
     algo_json = payload.get("algo_json") or {}
+    selection_detail: Dict[str, Any] = payload.get("selection_detail") or {}
 
     st.divider()
     st.subheader("Итог")
@@ -557,6 +820,23 @@ def render_meal_result(payload: Dict[str, Any]):
         f'<div class="card">{gemini_name} · {gemini_portion:.0f} г</div>',
         unsafe_allow_html=True,
     )
+    if selection_detail.get("reasoning"):
+        st.markdown(
+            f'<div class="card muted"><strong>Почему так</strong><br/>'
+            f'{selection_detail.get("reasoning", "")}</div>',
+            unsafe_allow_html=True,
+        )
+    vis = selection_detail.get("visible_ingredients") or []
+    if isinstance(vis, list) and vis:
+        st.caption("На фото (по ИИ): " + ", ".join(str(x) for x in vis))
+    iv = selection_detail.get("ingredient_verify")
+    if isinstance(iv, dict) and iv.get("confidence") is not None:
+        c = float(iv.get("confidence", 0) or 0)
+        ok = bool(iv.get("consistent", True))
+        st.caption(
+            f"Сверка с описанием блюда в базе: {'согласуется' if ok else 'сомнительно'} "
+            f"(уверенность {c:.2f})."
+        )
 
     st.markdown("**Калории из базы**")
     if hybrid_records:
@@ -583,7 +863,12 @@ def render_meal_result(payload: Dict[str, Any]):
         st.warning("Нет совпадения в базе — калории из справочника не посчитаны.")
 
     st.markdown("**Совпадения в базе**")
-    render_match_cards(hybrid_records, user_portion, gemini_portion)
+    fl = (
+        "Выбрано по фото (из кандидатов)"
+        if payload.get("constrained_visual_pick")
+        else "Лучшее совпадение"
+    )
+    render_match_cards(hybrid_records, user_portion, gemini_portion, first_label=fl)
 
     if hybrid_records:
         nut = nutrition_for_row(pd.Series(hybrid_records[0]), user_portion)
@@ -730,30 +1015,76 @@ def main():
                     st.error("База блюд пуста или недоступна.")
                 else:
                     jpeg = compress_image_bytes(img)
-                    with st.spinner("Анализ фото…"):
-                        agent = GeminiMealAgent(api_key)
-                        result = agent.analyze_meal_image_jpeg(jpeg)
-
-                    if result.get("error"):
-                        st.error(f"Ошибка модели: {result['error']}")
+                    engine = DishSearchEngine(db)
+                    candidates_df = engine.top_candidates_for_seed(user_dish.strip(), 20)
+                    if candidates_df.empty:
+                        st.error(
+                            "По введённому названию не нашлось похожих строк в базе. "
+                            "Уточните название — так мы сформируем список кандидатов для ИИ."
+                        )
                     else:
-                        dishes = result.get("dishes") or []
-                        if not dishes or normalize_text(dishes[0]["dish_name"]) == normalize_text("неизвестно"):
-                            st.error("Не удалось распознать блюдо. Попробуйте другой ракурс или свет.")
+                        with st.spinner("ИИ сравнивает фото со списком из базы…"):
+                            agent = GeminiMealAgent(api_key)
+                            result = agent.select_meal_from_candidates(jpeg, candidates_df)
+
+                        if result.get("error"):
+                            st.error(f"Ошибка модели: {result['error']}")
+                            if result.get("raw"):
+                                st.code(result["raw"][:1200])
                         else:
-                            primary = max(dishes, key=lambda d: float(d.get("confidence", 0)))
-                            gemini_name = primary["dish_name"]
-                            gemini_portion = float(primary["portion_grams"] or 0)
+                            sel = result.get("selection") or {}
+                            sid = sel.get("selected_meal_id")
+                            sname_raw = str(sel.get("selected_meal_name", "") or "").strip()
+                            sname_l = normalize_text(sname_raw)
+                            picked = find_candidate_row_by_id(candidates_df, sid)
+                            unknown = (
+                                picked is None
+                                or sid is None
+                                or sname_l == normalize_text("unknown")
+                                or sname_l == normalize_text("неизвестно")
+                            )
+                            selected_row: Optional[pd.Series] = None
+                            p_est: Dict[str, Any] = {}
+                            if unknown:
+                                gemini_name = "unknown"
+                                gemini_portion = 0.0
+                                matched_name = ""
+                                matched_en = ""
+                            else:
+                                selected_row = picked
+                                gemini_name = str(selected_row.get("name", "") or sname_raw)
+                                matched_name = str(selected_row.get("name", ""))
+                                matched_en = str(selected_row.get("name_en", "") or "")
+                                with st.spinner("Оценка порции по фото…"):
+                                    p_est = agent.estimate_portion_jpeg(jpeg, gemini_name)
+                                gemini_portion = float(p_est.get("portion_grams") or 0)
+                                if gemini_portion <= 0:
+                                    gemini_portion = 250.0
 
-                            engine = DishSearchEngine(db)
-                            hybrid_df, algo_json = engine.algorithm_bundle(gemini_name)
+                            vis_list = sel.get("visible_ingredients")
+                            if not isinstance(vis_list, list):
+                                vis_list = []
+                            vis_list = [str(x) for x in vis_list if str(x).strip()]
 
-                            matched_name = ""
-                            matched_en = ""
-                            if not hybrid_df.empty:
-                                br = hybrid_df.iloc[0]
-                                matched_name = str(br.get("name", ""))
-                                matched_en = str(br.get("name_en", "") or "")
+                            ingredient_verify: Optional[Dict[str, Any]] = None
+                            if not unknown and selected_row is not None:
+                                ing_exp = _candidate_description(selected_row)
+                                with st.spinner("Проверка согласованности с описанием…"):
+                                    ingredient_verify = agent.verify_ingredient_consistency(
+                                        str(selected_row.get("name", "")),
+                                        str(selected_row.get("name_en", "") or ""),
+                                        ing_exp,
+                                        vis_list,
+                                    )
+
+                            hybrid_df, algo_json = engine.algorithm_bundle(user_dish.strip())
+                            algo_json = {
+                                **algo_json,
+                                "visual_selection": sel,
+                                "candidate_pool_size": int(len(candidates_df)),
+                                "portion_estimate_error": None if unknown else p_est.get("error"),
+                                "ingredient_verify": ingredient_verify,
+                            }
 
                             verified, vdetail = is_verified(
                                 user_dish, gemini_name, matched_name, matched_en
@@ -761,18 +1092,22 @@ def main():
 
                             ku: Optional[float] = None
                             kg: Optional[float] = None
-                            if not hybrid_df.empty:
-                                brs = hybrid_df.iloc[0]
+                            nutrition_row: Optional[pd.Series] = None
+                            if not unknown and selected_row is not None:
+                                nutrition_row = selected_row
+                            elif not hybrid_df.empty:
+                                nutrition_row = hybrid_df.iloc[0]
+                            if nutrition_row is not None:
                                 ku = float(
-                                    nutrition_for_row(brs, float(user_portion))[
-                                        "kilocalories"
-                                    ]
+                                    nutrition_for_row(
+                                        nutrition_row, float(user_portion)
+                                    )["kilocalories"]
                                 )
                                 if gemini_portion > 0:
                                     kg = float(
-                                        nutrition_for_row(brs, gemini_portion)[
-                                            "kilocalories"
-                                        ]
+                                        nutrition_for_row(
+                                            nutrition_row, gemini_portion
+                                        )["kilocalories"]
                                     )
 
                             saved = save_result_row(
@@ -796,9 +1131,18 @@ def main():
                             elif os.environ.get("DATABASE_URL"):
                                 st.caption("Не удалось сохранить в историю (ошибка БД).")
 
-                            hybrid_records = (
-                                hybrid_df.to_dict("records") if not hybrid_df.empty else []
+                            hybrid_records = reorder_candidate_records(
+                                candidates_df,
+                                selected_row if not unknown else None,
                             )
+                            vis_conf = float(sel.get("confidence", 0) or 0)
+                            primary = {
+                                "dish_name": gemini_name,
+                                "portion_grams": gemini_portion,
+                                "confidence": vis_conf,
+                            }
+                            dishes: List[Dict[str, Any]] = [primary]
+
                             st.session_state.meal_result = {
                                 "verified": verified,
                                 "user_dish": user_dish.strip(),
@@ -809,7 +1153,18 @@ def main():
                                 "dishes": dishes,
                                 "primary": primary,
                                 "algo_json": algo_json,
+                                "constrained_visual_pick": not unknown,
+                                "selection_detail": {
+                                    "reasoning": str(sel.get("reasoning", "") or ""),
+                                    "visible_ingredients": vis_list,
+                                    "ingredient_verify": ingredient_verify,
+                                },
                             }
+                            if unknown:
+                                st.warning(
+                                    "ИИ не нашёл среди кандидатов уверенного совпадения с фото. "
+                                    "Попробуйте другое фото или уточните название блюда."
+                                )
 
     res = st.session_state.get("meal_result")
     if res is not None:

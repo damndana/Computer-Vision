@@ -1,7 +1,7 @@
 import io
 import json
 import os
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import streamlit as st
 from PIL import Image

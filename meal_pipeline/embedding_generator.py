@@ -71,12 +71,19 @@ def generate_embeddings(
 ) -> Tuple[np.ndarray, np.ndarray]:
     from sentence_transformers import SentenceTransformer
 
+    logger.info(
+        "Generating embeddings from database (table=%s, rows will be loaded next)",
+        meal_table_name(),
+    )
     df = load_all_meals_df()
     if df.empty:
         raise RuntimeError("No meals in database — nothing to embed.")
 
     if "id" not in df.columns:
         raise RuntimeError("Meal table must have an 'id' column (BIGSERIAL).")
+
+    n_meals = len(df)
+    logger.info("Loaded %s meals from PostgreSQL", n_meals)
 
     texts: List[str] = []
     ids: List[int] = []
@@ -88,7 +95,7 @@ def generate_embeddings(
     logger.info("Loading CLIP model: %s", config.CLIP_MODEL_NAME)
     model = SentenceTransformer(config.CLIP_MODEL_NAME, device=os.environ.get("CLIP_DEVICE", "cpu"))
 
-    logger.info("Encoding %s meal texts…", len(texts))
+    logger.info("Encoding %s meal texts with CLIP…", len(texts))
     embs: List[np.ndarray] = []
     for i in tqdm(range(0, len(texts), batch_size), desc="CLIP encode"):
         chunk = texts[i : i + batch_size]
@@ -105,6 +112,11 @@ def generate_embeddings(
 
     index = build_ip_index(vectors)
     save_index(index, meal_ids, config.FAISS_INDEX_PATH, config.MEAL_IDS_PATH)
+    logger.info(
+        "FAISS index saved to %s and %s",
+        config.FAISS_INDEX_PATH,
+        config.MEAL_IDS_PATH,
+    )
 
     if write_pg:
         url = os.environ.get("DATABASE_URL")
@@ -135,4 +147,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        logger.exception("meal_pipeline.embedding_generator failed")
+        raise SystemExit(1)

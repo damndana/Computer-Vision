@@ -11,4 +11,6 @@ Nutritionist-FoodRecognition is an intelligent food recognition system. Analyze 
 
 Modules live under `meal_pipeline/` (`embedding_generator.py`, `vector_index.py`, `meal_retriever.py`, `gemini_reasoner.py`, `multi_meal_detector.py`, `nutrition_calculator.py`, `api.py`).
 
-The **Streamlit** main page uses the same `data/*.index` + `data/*.npy` when present: then **название блюда не обязательно** (кандидаты из CLIP+FAISS). Установите `requirements-api.txt` на сервере Streamlit, если ещё не стоят `sentence-transformers` / `faiss-cpu`.
+The **Streamlit** main page uses the same `data/*.index` + `data/*.npy` when present: then **название блюда не обязательно** (кандидаты из CLIP+FAISS).
+
+**Docker (Dokploy):** the image installs `requirements-api.txt` and the entrypoint runs `python -m meal_pipeline.embedding_generator` **once** when `meals_faiss.index` / `meal_faiss_ids.npy` are missing under `MEAL_PIPELINE_DATA_DIR` (default `/app/data`). Mount a persistent volume on `/app/data` if you want to skip rebuild on every new container.

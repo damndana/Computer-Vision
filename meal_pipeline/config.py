@@ -4,9 +4,14 @@ from __future__ import annotations
 import os
 import pathlib
 
-# Paths (defaults under repo data/)
+# Paths: optional MEAL_PIPELINE_DATA_DIR (Dokploy/Docker often sets /app/data).
 _REPO = pathlib.Path(__file__).resolve().parents[1]
-_DATA = pathlib.Path(os.environ.get("MEAL_PIPELINE_DATA_DIR", str(_REPO / "data")))
+_DATA = pathlib.Path(
+    os.environ.get(
+        "MEAL_PIPELINE_DATA_DIR",
+        str(_REPO / "data"),
+    )
+)
 
 CLIP_MODEL_NAME = os.environ.get(
     "CLIP_MODEL_NAME", "sentence-transformers/clip-ViT-B-32"

@@ -1,0 +1,12 @@
+# FastAPI meal pipeline (CLIP + FAISS + Gemini). Install in addition to or instead of Streamlit-only deps.
+# pip install -r requirements-api.txt
+
+-r requirements.txt
+
+fastapi>=0.110.0
+python-multipart>=0.0.9
+uvicorn[standard]>=0.27.0
+sentence-transformers>=2.6.0
+faiss-cpu>=1.8.0
+numpy>=1.24.0
+tqdm>=4.66.0

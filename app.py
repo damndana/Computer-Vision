@@ -430,6 +430,66 @@ def is_verified(user_dish: str, gemini_dish: str, db_name: str, db_name_en: str)
     return ok, detail
 
 
+def is_verified_smart(
+    user_dish: str, gemini_dish: str, db_name: str, db_name_en: str
+) -> Tuple[bool, Dict[str, Any]]:
+    """If the user left the dish name empty (photo-only flow), only check Gemini vs DB."""
+    if not (user_dish or "").strip():
+        s = verification_scores("", gemini_dish, db_name, db_name_en)
+        ok = s["gemini_vs_db"] >= GEMINI_DB_MIN
+        detail = {
+            "thresholds": {
+                "mode": "photo_only",
+                "gemini_vs_db_min": GEMINI_DB_MIN,
+            },
+            "scores": s,
+            "verified": ok,
+        }
+        return ok, detail
+    return is_verified(user_dish, gemini_dish, db_name, db_name_en)
+
+
+def clip_index_files_exist() -> bool:
+    """True when CLIP+FAISS index files from meal_pipeline are present."""
+    try:
+        from meal_pipeline import config as mp_cfg
+
+        return bool(mp_cfg.FAISS_INDEX_PATH.is_file() and mp_cfg.MEAL_IDS_PATH.is_file())
+    except Exception:
+        return False
+
+
+@st.cache_resource
+def _clip_meal_retriever_cached():
+    try:
+        from meal_pipeline.meal_retriever import MealRetriever
+
+        r = MealRetriever()
+        r.ensure_loaded()
+        return r
+    except Exception:
+        return None
+
+
+def candidates_df_from_clip_image(
+    image: Image.Image, database: pd.DataFrame, k: int = 20
+) -> pd.DataFrame:
+    """Top-k meals by CLIP image similarity (same order as FAISS)."""
+    ret = _clip_meal_retriever_cached()
+    if ret is None or database.empty or "id" not in database.columns:
+        return pd.DataFrame()
+    hits = ret.retrieve_for_image(image.convert("RGB"), k)
+    rows_out: List[Dict[str, Any]] = []
+    for mid, sc in hits:
+        m = database[database["id"] == mid]
+        if m.empty:
+            continue
+        d = m.iloc[0].to_dict()
+        d["score"] = float(max(0.0, min(1.0, sc))) * 100.0
+        rows_out.append(d)
+    return pd.DataFrame(rows_out)
+
+
 def row_candidate_id(row: pd.Series) -> int:
     """Stable integer id for prompt / JSON (DB id preferred, else dataframe index from search)."""
     rid = row.get("id")
@@ -936,12 +996,18 @@ def render_meal_result_single(payload: Dict[str, Any]):
         else '<span class="badge-bad">Не подтверждено</span>'
     )
     st.markdown(badge, unsafe_allow_html=True)
-    st.caption(
-        "Подтверждение: ваше название близко к ответу ИИ, а ответ ИИ согласуется с выбранной строкой базы "
-        f"(пороги схожести ≈ {USER_GEMINI_MIN:.0f}% / {GEMINI_DB_MIN:.0f}%)."
-    )
+    if payload.get("photo_only"):
+        st.caption(
+            "Режим только по фото: подтверждение — по согласованию ответа ИИ со строкой базы "
+            f"(порог ≈ {GEMINI_DB_MIN:.0f}%)."
+        )
+    else:
+        st.caption(
+            "Подтверждение: ваше название близко к ответу ИИ, а ответ ИИ согласуется с выбранной строкой базы "
+            f"(пороги схожести ≈ {USER_GEMINI_MIN:.0f}% / {GEMINI_DB_MIN:.0f}%)."
+        )
 
-    st.markdown("**Вы указали**")
+    st.markdown("**Порция**" if payload.get("photo_only") else "**Вы указали**")
     st.markdown(f'<div class="card">{user_dish} · {user_portion:.0f} г</div>', unsafe_allow_html=True)
     st.markdown("**ИИ**")
     st.markdown(
@@ -1048,14 +1114,23 @@ def render_meal_result_multi(payload: Dict[str, Any], meal_items: List[Dict[str,
         else '<span class="badge-bad">Не подтверждено</span>'
     )
     st.markdown(badge, unsafe_allow_html=True)
-    st.caption(
-        "Для каждого блюда: ваше название сравнивается с ответом ИИ по этому пункту, "
-        "ответ ИИ — со строкой базы "
-        f"(пороги ≈ {USER_GEMINI_MIN:.0f}% / {GEMINI_DB_MIN:.0f}%). "
-        "Зелёная галочка — только если **все** распознанные блюда прошли проверку."
-    )
+    if payload.get("photo_only"):
+        st.caption(
+            "Только фото: для каждого блюда проверяется согласование ответа ИИ со строкой базы "
+            f"(порог ≈ {GEMINI_DB_MIN:.0f}%). "
+            "Зелёная галочка — если **все** пункты прошли проверку."
+        )
+    else:
+        st.caption(
+            "Для каждого блюда: ваше название сравнивается с ответом ИИ по этому пункту, "
+            "ответ ИИ — со строкой базы "
+            f"(пороги ≈ {USER_GEMINI_MIN:.0f}% / {GEMINI_DB_MIN:.0f}%). "
+            "Зелёная галочка — только если **все** распознанные блюда прошли проверку."
+        )
 
-    st.markdown("**Вы указали (на всё фото)**")
+    st.markdown(
+        "**Порция (на всё фото)**" if payload.get("photo_only") else "**Вы указали (на всё фото)**"
+    )
     st.markdown(f'<div class="card">{user_dish} · {user_portion:.0f} г</div>', unsafe_allow_html=True)
     st.markdown("**ИИ — несколько блюд**")
     st.markdown(
@@ -1236,17 +1311,30 @@ def main():
     if img is not None:
         image_wide(img)
 
-    st.subheader("Что вы съели")
-    user_dish = st.text_input(
-        "Название блюда",
-        placeholder="одно блюдо или кратко всё на фото",
-        key="udish",
-    )
-    user_portion = st.number_input("Порция, г", min_value=0.0, max_value=5000.0, value=200.0, step=10.0)
+    st.subheader("Порция")
+    user_portion = st.number_input("Порция, г (на всё фото)", min_value=0.0, max_value=5000.0, value=200.0, step=10.0)
+
+    photo_pipeline = clip_index_files_exist()
+    if photo_pipeline:
+        st.success(
+            "Режим **только фото**: кандидаты из базы подбираются по CLIP+FAISS — название блюда не обязательно."
+        )
+    else:
+        st.warning(
+            "Чтобы не вводить название блюда, на сервере нужны файлы индекса CLIP "
+            "(см. README: `python -m meal_pipeline.embedding_generator`). "
+            "Пока индекса нет — ниже можно **опционально** указать название для текстового поиска кандидатов."
+        )
+
+    with st.expander("Необязательно: как вы называете блюдо (если нет CLIP-индекса)", expanded=not photo_pipeline):
+        user_dish = st.text_input(
+            "Название для поиска в базе",
+            placeholder="оставьте пустым при работе только по фото",
+            key="udish",
+        )
+
     st.caption(
-        "Если на фото несколько блюд: опишите всё в названии или общим словом — "
-        "по нему подбираются кандидаты из базы; ИИ затем размечает каждое блюдо отдельно. "
-        "Граммы — на всё фото; по весам порций ИИ они делятся между блюдами."
+        "При нескольких блюдах на фото граммы — на всё фото; ИИ делит порцию между блюдами по оценке веса."
     )
 
     analyze = st.button("Анализировать", type="primary", key="go")
@@ -1254,8 +1342,6 @@ def main():
     if analyze:
         if img is None:
             st.error("Сначала добавьте фото (камера или файл).")
-        elif not user_dish.strip():
-            st.error("Введите название блюда.")
         else:
             api_key = get_gemini_api_key()
             if not api_key:
@@ -1267,13 +1353,37 @@ def main():
                 else:
                     jpeg = compress_image_bytes(img)
                     engine = DishSearchEngine(db)
-                    candidates_df = engine.top_candidates_for_seed(user_dish.strip(), 20)
-                    if candidates_df.empty:
-                        st.error(
-                            "По введённому названию не нашлось похожих строк в базе. "
-                            "Уточните название — так мы сформируем список кандидатов для ИИ."
-                        )
+                    use_clip = False
+                    if photo_pipeline:
+                        _cret = _clip_meal_retriever_cached()
+                        if _cret is not None:
+                            use_clip = True
+                        else:
+                            st.warning(
+                                "Найдены файлы CLIP+FAISS, но модель не загрузилась. "
+                                "Установите зависимости: `pip install -r requirements-api.txt`, "
+                                "либо введите название блюда в поле ниже."
+                            )
+                    if use_clip:
+                        candidates_df = candidates_df_from_clip_image(img, db, 20)
+                    elif user_dish.strip():
+                        candidates_df = engine.top_candidates_for_seed(user_dish.strip(), 20)
                     else:
+                        candidates_df = pd.DataFrame()
+
+                    if candidates_df.empty:
+                        if use_clip:
+                            st.error(
+                                "CLIP+FAISS не вернул кандидатов (проверьте индекс и совпадение id в базе). "
+                                "Либо укажите название блюда в блоке выше."
+                            )
+                        else:
+                            st.error(
+                                "Нет кандидатов: включите CLIP-индекс на сервере **или** введите название блюда "
+                                "в необязательном поле."
+                            )
+                    else:
+                        _user_dish_saved = user_dish.strip() or "(только фото)"
                         with st.spinner("ИИ сравнивает фото со списком из базы…"):
                             agent = GeminiMealAgent(api_key)
                             result = agent.select_meals_from_candidates(jpeg, candidates_df)
@@ -1369,7 +1479,7 @@ def main():
                             verified_each: List[bool] = []
                             vdetails_each: List[Dict[str, Any]] = []
                             for s in slots:
-                                v_ok, v_d = is_verified(
+                                v_ok, v_d = is_verified_smart(
                                     user_dish.strip(),
                                     s["gemini_name"],
                                     s["matched_name"],
@@ -1393,13 +1503,22 @@ def main():
                                 "verified_overall": verified_overall,
                             }
 
-                            hybrid_df, algo_json = engine.algorithm_bundle(user_dish.strip())
+                            _bundle_seed = user_dish.strip()
+                            if not _bundle_seed and not candidates_df.empty:
+                                _bundle_seed = str(
+                                    candidates_df.iloc[0].get("name", "блюдо") or "блюдо"
+                                )
+                            if not _bundle_seed:
+                                _bundle_seed = "блюдо"
+                            hybrid_df, algo_json = engine.algorithm_bundle(_bundle_seed)
                             algo_json = {
                                 **algo_json,
                                 "visual_selection_raw": result.get("raw"),
                                 "candidate_pool_size": int(len(candidates_df)),
                                 "portion_multi": p_est_multi,
                                 "multi_plate": len(slots) >= 2,
+                                "candidate_source": "clip_faiss" if use_clip else "text_seed",
+                                "photo_only": not bool(user_dish.strip()),
                             }
 
                             names_join = " · ".join(
@@ -1503,7 +1622,7 @@ def main():
 
                             saved = save_result_row(
                                 user_name=st.session_state.user_name,
-                                user_dish_name=user_dish.strip(),
+                                user_dish_name=_user_dish_saved,
                                 user_portion=float(user_portion),
                                 gemini_dish_name=gemini_name[:512],
                                 gemini_portion=float(gemini_portion),
@@ -1540,7 +1659,7 @@ def main():
                             if multi_ui:
                                 st.session_state.meal_result = {
                                     "verified": verified_overall,
-                                    "user_dish": user_dish.strip(),
+                                    "user_dish": _user_dish_saved,
                                     "user_portion": float(user_portion),
                                     "gemini_name": gemini_name,
                                     "gemini_portion": float(gemini_portion),
@@ -1551,13 +1670,14 @@ def main():
                                     "constrained_visual_pick": any_known,
                                     "meal_items": meal_items,
                                     "multi_plate": True,
+                                    "photo_only": not bool(user_dish.strip()),
                                 }
                             else:
                                 s0 = slots[0]
                                 sel0 = s0["sel"]
                                 st.session_state.meal_result = {
                                     "verified": verified_each[0],
-                                    "user_dish": user_dish.strip(),
+                                    "user_dish": _user_dish_saved,
                                     "user_portion": float(user_portion),
                                     "gemini_name": s0["gemini_name"],
                                     "gemini_portion": float(s0["gemini_portion"] or 0),
@@ -1573,12 +1693,14 @@ def main():
                                         "visible_ingredients": s0["visible_ingredients"],
                                         "ingredient_verify": s0.get("ingredient_verify"),
                                     },
+                                    "photo_only": not bool(user_dish.strip()),
                                 }
 
                             if not any_known:
                                 st.warning(
                                     "ИИ не сопоставил фото ни с одним кандидатом из базы. "
-                                    "Попробуйте другой ракурс или уточните название."
+                                    "Попробуйте другой ракурс"
+                                    + (" или укажите название в необязательном поле." if not use_clip else ".")
                                 )
 
     res = st.session_state.get("meal_result")

@@ -22,7 +22,8 @@ FAISS_INDEX_PATH = pathlib.Path(
 MEAL_IDS_PATH = pathlib.Path(
     os.environ.get("MEAL_IDS_PATH", str(_DATA / "meal_faiss_ids.npy"))
 )
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+# gemini-2.0-flash may be unavailable for new users; default to a newer Flash model.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 TOP_K_RETRIEVAL = int(os.environ.get("TOP_K_RETRIEVAL", "20"))
 
 # Reuse Nutristeppe table name from main app

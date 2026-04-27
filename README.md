@@ -14,3 +14,5 @@ Modules live under `meal_pipeline/` (`embedding_generator.py`, `vector_index.py`
 The **Streamlit** main page uses the same `data/*.index` + `data/*.npy` when present: then **название блюда не обязательно** (кандидаты из CLIP+FAISS).
 
 **Docker (Dokploy):** the image installs `requirements-api.txt` and the entrypoint runs `python -m meal_pipeline.embedding_generator` **once** when `meals_faiss.index` / `meal_faiss_ids.npy` are missing under `MEAL_PIPELINE_DATA_DIR` (default `/app/data`). Mount a persistent volume on `/app/data` if you want to skip rebuild on every new container.
+
+If Gemini returns a 404 about a deprecated model, set `GEMINI_MODEL` in the environment (default is `gemini-2.5-flash`).

@@ -1365,13 +1365,283 @@ def main():
                                 "либо введите название блюда в поле ниже."
                             )
                     if use_clip:
-                        candidates_df = candidates_df_from_clip_image(img, db, 20)
+                        # CLIP+FAISS photo-only mode: retrieve candidates per detected dish
+                        candidates_df = pd.DataFrame()
                     elif user_dish.strip():
                         candidates_df = engine.top_candidates_for_seed(user_dish.strip(), 20)
                     else:
                         candidates_df = pd.DataFrame()
 
-                    if candidates_df.empty:
+                    if use_clip:
+                        _user_dish_saved = user_dish.strip() or "(только фото)"
+                        try:
+                            from meal_pipeline import config as mp_cfg
+                            from meal_pipeline.gemini_reasoner import GeminiReasoner
+                            from meal_pipeline.multi_meal_detector import MultiMealDetector
+
+                            retr = _clip_meal_retriever_cached()
+                            if retr is None:
+                                raise RuntimeError("clip_retriever_unavailable")
+
+                            with st.spinner("ИИ определяет, сколько блюд на фото…"):
+                                detector = MultiMealDetector(api_key, mp_cfg.GEMINI_MODEL)
+                                layout = detector.analyze_plate(jpeg)
+
+                            # role heuristic: largest fraction is main
+                            dishes_layout = list(layout.dishes or [])
+                            if not dishes_layout:
+                                dishes_layout = [{"description": "meal on plate", "fraction": 1.0}]
+                            main_i = 0
+                            best_f = -1.0
+                            for i, d in enumerate(dishes_layout):
+                                try:
+                                    f = float(d.get("fraction", 0) or 0)
+                                except (TypeError, ValueError):
+                                    f = 0.0
+                                if f > best_f:
+                                    best_f = f
+                                    main_i = i
+
+                            reasoner = GeminiReasoner(api_key, mp_cfg.GEMINI_MODEL)
+
+                            meal_items: List[Dict[str, Any]] = []
+                            per_dish_details: List[Dict[str, Any]] = []
+                            for i, d in enumerate(dishes_layout[:MAX_PLATE_DISHES]):
+                                desc = str(d.get("description", "") or "").strip() or "food item"
+                                try:
+                                    frac = float(d.get("fraction", 1.0 / max(len(dishes_layout), 1)) or 0)
+                                except (TypeError, ValueError):
+                                    frac = 1.0 / max(len(dishes_layout), 1)
+                                frac = max(0.0, min(1.0, frac))
+                                role = "main" if i == main_i else "side"
+
+                                # Candidate retrieval for this dish description
+                                hits = retr.retrieve_for_text(desc, 20)
+                                ids = [mid for mid, _ in hits]
+                                # Build candidates from in-memory db frame (avoid extra DB round trips)
+                                cand_rows: List[Dict[str, Any]] = []
+                                candidates_df_i_rows: List[Dict[str, Any]] = []
+                                for mid, sc in hits:
+                                    m = db[db["id"] == int(mid)] if "id" in db.columns else pd.DataFrame()
+                                    if m.empty:
+                                        continue
+                                    rr = m.iloc[0].to_dict()
+                                    rr["score"] = float(max(0.0, min(1.0, sc))) * 100.0
+                                    candidates_df_i_rows.append(rr)
+                                    cand_rows.append(
+                                        {
+                                            "meal_id": int(mid),
+                                            "id": int(mid),
+                                            "name": str(rr.get("name", "")),
+                                            "description": _candidate_description(pd.Series(rr)),
+                                            "retrieval_score": float(sc),
+                                        }
+                                    )
+                                candidates_df_i = pd.DataFrame(candidates_df_i_rows)
+
+                                with st.spinner(f"ИИ выбирает блюдо для: {desc[:40]}…"):
+                                    picks = reasoner.select_from_candidates(jpeg, cand_rows, slot_hint=desc)
+                                if not picks:
+                                    sel = {
+                                        "selected_meal_id": None,
+                                        "selected_meal_name": "unknown",
+                                        "confidence": 0.0,
+                                        "visible_ingredients": [],
+                                        "reasoning": f"No candidate matches this food: {desc}",
+                                        "role": role,
+                                    }
+                                    unk = True
+                                    row = None
+                                    gname = "unknown"
+                                    mru = ""
+                                    men = ""
+                                else:
+                                    p0 = picks[0]
+                                    mid = int(p0["meal_id"])
+                                    sel = {
+                                        "selected_meal_id": mid,
+                                        "selected_meal_name": str(p0.get("meal_name", "")),
+                                        "confidence": float(p0.get("confidence", 0) or 0),
+                                        "visible_ingredients": [],
+                                        "reasoning": f"Slot hint: {desc}",
+                                        "role": role,
+                                    }
+                                    unk = False
+                                    row = None
+                                    if not candidates_df_i.empty:
+                                        row = candidates_df_i[candidates_df_i["id"] == mid].head(1)
+                                        row = row.iloc[0] if not row.empty else None
+                                    if row is None:
+                                        # Fallback: look up in db directly
+                                        m = db[db["id"] == mid] if "id" in db.columns else pd.DataFrame()
+                                        row = m.iloc[0] if not m.empty else None
+                                    if row is None:
+                                        unk = True
+                                        gname = "unknown"
+                                        mru = ""
+                                        men = ""
+                                    else:
+                                        row = pd.Series(row)
+                                        gname = str(row.get("name", "") or sel["selected_meal_name"])
+                                        mru = str(row.get("name", ""))
+                                        men = str(row.get("name_en", "") or "")
+
+                                portion_i = float(user_portion) * frac
+                                if portion_i <= 0:
+                                    portion_i = 0.0
+
+                                verified_i, vdetail_i = is_verified_smart("", gname, mru, men)
+                                per_dish_details.append(vdetail_i)
+
+                                rd = row.to_dict() if isinstance(row, pd.Series) else None
+                                meal_items.append(
+                                    {
+                                        "role": role,
+                                        "gemini_name": gname,
+                                        "gemini_portion": 0.0,
+                                        "user_portion_allocated": portion_i,
+                                        "matched_name": mru,
+                                        "matched_en": men,
+                                        "verified": verified_i,
+                                        "unknown": unk,
+                                        "nutrition_row_dict": rd,
+                                        "selection_detail": {
+                                            "reasoning": str(sel.get("reasoning", "") or ""),
+                                            "visible_ingredients": [],
+                                            "ingredient_verify": None,
+                                        },
+                                        "hybrid_records": candidates_df_i.to_dict("records")
+                                        if not candidates_df_i.empty
+                                        else [],
+                                    }
+                                )
+
+                                # Keep candidates of main dish for the bottom list
+                                if i == main_i:
+                                    candidates_df = candidates_df_i
+
+                            any_known = any(not x.get("unknown") for x in meal_items)
+                            verified_overall = any_known and all(
+                                bool(x.get("verified")) for x in meal_items if not x.get("unknown")
+                            )
+
+                            gemini_name = " · ".join(
+                                str(x.get("gemini_name") or "")
+                                for x in meal_items
+                                if str(x.get("gemini_name") or "").strip() and x.get("gemini_name") != "unknown"
+                            ) or "unknown"
+                            gemini_portion = float(user_portion)
+
+                            matched_name = " · ".join(
+                                str(x.get("matched_name") or "")
+                                for x in meal_items
+                                if str(x.get("matched_name") or "").strip()
+                            )
+                            matched_en = " · ".join(
+                                str(x.get("matched_en") or "")
+                                for x in meal_items
+                                if str(x.get("matched_en") or "").strip()
+                            )
+
+                            hybrid_df, algo_json = engine.algorithm_bundle(
+                                str(candidates_df.iloc[0].get("name", "блюдо")) if not candidates_df.empty else "блюдо"
+                            )
+                            algo_json = {
+                                **algo_json,
+                                "multi_plate": len(meal_items) >= 2,
+                                "candidate_source": "clip_faiss_per_dish",
+                                "photo_only": True,
+                                "plate_layout": dishes_layout,
+                                "per_dish_verification": per_dish_details,
+                            }
+                            algo_json["meal_items"] = [
+                                {
+                                    "role": x["role"],
+                                    "gemini_name": x["gemini_name"],
+                                    "user_portion_allocated": x["user_portion_allocated"],
+                                    "matched_name": x["matched_name"],
+                                    "matched_en": x["matched_en"],
+                                    "verified": x["verified"],
+                                    "unknown": x["unknown"],
+                                    "reasoning": (x.get("selection_detail") or {}).get("reasoning", ""),
+                                }
+                                for x in meal_items
+                            ]
+
+                            # calories from DB rows per dish (user portion split)
+                            ku_acc = 0.0
+                            for x in meal_items:
+                                rd = x.get("nutrition_row_dict")
+                                if not isinstance(rd, dict) or not rd:
+                                    continue
+                                ku_acc += float(
+                                    nutrition_for_row(pd.Series(rd), float(x.get("user_portion_allocated") or 0))[
+                                        "kilocalories"
+                                    ]
+                                )
+                            ku: Optional[float] = ku_acc if any_known else None
+                            kg: Optional[float] = None
+
+                            saved = save_result_row(
+                                user_name=st.session_state.user_name,
+                                user_dish_name=_user_dish_saved,
+                                user_portion=float(user_portion),
+                                gemini_dish_name=gemini_name[:512],
+                                gemini_portion=float(gemini_portion),
+                                matched_db_dish=matched_name[:512],
+                                matched_db_name_en=matched_en[:512],
+                                algorithm_results=algo_json,
+                                verification_status=verified_overall,
+                                verification_detail={
+                                    "multi_plate": len(meal_items) >= 2,
+                                    "per_dish": per_dish_details,
+                                    "verified_overall": verified_overall,
+                                },
+                                image_jpeg=jpeg,
+                                user_id=st.session_state.get("user_id"),
+                                kcal_user_portion=ku,
+                                kcal_gemini_portion=kg,
+                            )
+                            if saved:
+                                st.caption("Сохранено в истории.")
+                            elif os.environ.get("DATABASE_URL"):
+                                st.caption("Не удалось сохранить в историю (ошибка БД).")
+
+                            dishes: List[Dict[str, Any]] = [
+                                {
+                                    "dish_name": str(x.get("gemini_name") or "unknown"),
+                                    "portion_grams": float(x.get("user_portion_allocated") or 0),
+                                    "confidence": 0.0,
+                                }
+                                for x in meal_items
+                            ]
+                            primary = dishes[0] if dishes else {
+                                "dish_name": "unknown",
+                                "portion_grams": 0.0,
+                                "confidence": 0.0,
+                            }
+
+                            st.session_state.meal_result = {
+                                "verified": verified_overall,
+                                "user_dish": _user_dish_saved,
+                                "user_portion": float(user_portion),
+                                "gemini_name": gemini_name,
+                                "gemini_portion": float(gemini_portion),
+                                "hybrid_records": candidates_df.to_dict("records") if not candidates_df.empty else [],
+                                "dishes": dishes,
+                                "primary": primary,
+                                "algo_json": algo_json,
+                                "constrained_visual_pick": any_known,
+                                "meal_items": meal_items,
+                                "multi_plate": len(meal_items) >= 2,
+                                "photo_only": True,
+                            }
+                        except Exception as e:
+                            st.error(
+                                "Ошибка фото-режима CLIP+FAISS (по блюдам). "
+                                f"Проверьте зависимости и индекс. Деталь: {e}"
+                            )
+                    elif candidates_df.empty:
                         if use_clip:
                             st.error(
                                 "CLIP+FAISS не вернул кандидатов (проверьте индекс и совпадение id в базе). "

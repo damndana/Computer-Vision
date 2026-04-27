@@ -106,7 +106,7 @@ Rules:
             return PlateLayout(1, [{"description": "meal on plate", "fraction": 1.0}])
 
         cleaned: List[Dict[str, Any]] = []
-        for d in dishes[:8]:
+        for d in dishes[:10]:
             if not isinstance(d, dict):
                 continue
             desc = str(d.get("description", "")).strip() or "food item"

@@ -379,7 +379,7 @@ class DishSearchEngine:
 
 USER_GEMINI_MIN = float(os.environ.get("VERIFY_USER_GEMINI_MIN", "72"))
 GEMINI_DB_MIN = float(os.environ.get("VERIFY_GEMINI_DB_MIN", "68"))
-MAX_PLATE_DISHES = max(1, min(8, int(os.environ.get("MAX_PLATE_DISHES", "5"))))
+MAX_PLATE_DISHES = max(1, min(10, int(os.environ.get("MAX_PLATE_DISHES", "10"))))
 
 
 def verification_scores(

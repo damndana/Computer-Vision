@@ -1,6 +1,8 @@
 # Nutristeppe Streamlit + CLIP/FAISS (Dokploy / GitHub)
 # Layer order: deps only re-install when requirements*.txt change; app COPY is last.
-FROM python:3.11-slim
+# Avoid Docker Hub auth/token flakiness on Dokploy (auth.docker.io 520).
+# This image is the official Docker Library mirror on Amazon ECR Public.
+FROM public.ecr.aws/docker/library/python:3.11-slim
 
 WORKDIR /app
 

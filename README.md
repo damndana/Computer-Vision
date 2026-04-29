@@ -13,6 +13,16 @@ Modules live under `meal_pipeline/` (`embedding_generator.py`, `vector_index.py`
 
 The **Streamlit** main page uses the same `data/*.index` + `data/*.npy` when present: then **название блюда не обязательно** (кандидаты из CLIP+FAISS).
 
-**Docker (Dokploy):** the image installs `requirements-api.txt` and the entrypoint runs `python -m meal_pipeline.embedding_generator` **once** when `meals_faiss.index` / `meal_faiss_ids.npy` are missing under `MEAL_PIPELINE_DATA_DIR` (default `/app/data`). Mount a persistent volume on `/app/data` if you want to skip rebuild on every new container.
+**Docker (Dokploy):**
+
+- The app expects CLIP+FAISS artifacts under `MEAL_PIPELINE_DATA_DIR` (default `/app/data`):
+  - `meals_faiss.index`
+  - `meal_faiss_ids.npy`
+- **Production recommendation**: mount a **persistent volume** on `/app/data` so redeploys don’t rebuild / re-download models.
+- Startup build behavior is controlled by:
+  - `MEAL_PIPELINE_BUILD_INDEX_ON_STARTUP` (default `0`)
+    - `0`: start Streamlit immediately; **skip** FAISS build (photo-only mode disabled until artifacts exist)
+    - `1`: start Streamlit immediately; build FAISS **in background** (may take minutes on first run)
+- Model download cache is stored under `${MEAL_PIPELINE_DATA_DIR}/hf_cache` by default (can be overridden by `HF_HOME`).
 
 If Gemini returns a 404 about a deprecated model, set `GEMINI_MODEL` in the environment (default is `gemini-2.5-flash`).

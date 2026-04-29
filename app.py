@@ -1046,17 +1046,14 @@ def render_meal_result_single(payload: Dict[str, Any]):
             pass
     extra = f" ({db_name_en})" if db_name_en else ""
     st.markdown("**База**")
-    st.markdown(
+    db_html = (
         f'<div class="card">{db_name}{extra}<br/>'
         f'<span class="muted">Classification score (CLIP softmax): {db_conf * 100.0:.0f}%</span>'
-        + (
-            f'<br/><span class="muted">Similarity (cosine): {db_sim:.3f}</span>'
-            if db_sim is not None
-            else ""
-        )
-        f"</div>",
-        unsafe_allow_html=True,
     )
+    if db_sim is not None:
+        db_html += f'<br/><span class="muted">Similarity (cosine): {db_sim:.3f}</span>'
+    db_html += "</div>"
+    st.markdown(db_html, unsafe_allow_html=True)
     # Calories (minimal): from matched DB row, scaled to user's portion
     if hybrid_records:
         try:

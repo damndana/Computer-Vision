@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import re
+import math
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -1031,20 +1032,28 @@ def render_meal_result_single(payload: Dict[str, Any]):
 
     db_name = "—"
     db_name_en = ""
-    db_conf = 0.0
+    db_conf = 0.0  # classification-style score in [0,1]
+    db_sim: Optional[float] = None  # raw CLIP cosine similarity (if present)
     if hybrid_records:
         try:
             r0 = hybrid_records[0] or {}
             db_name = str(r0.get("name", "") or "—")
             db_name_en = str(r0.get("name_en", "") or "")
             db_conf = float(r0.get("score", 0) or 0) / 100.0
+            if r0.get("similarity") is not None:
+                db_sim = float(r0.get("similarity"))
         except Exception:
             pass
     extra = f" ({db_name_en})" if db_name_en else ""
     st.markdown("**База**")
     st.markdown(
         f'<div class="card">{db_name}{extra}<br/>'
-        f'<span class="muted">Уверенность базы: {db_conf * 100.0:.0f}%</span>'
+        f'<span class="muted">Classification score (CLIP softmax): {db_conf * 100.0:.0f}%</span>'
+        + (
+            f'<br/><span class="muted">Similarity (cosine): {db_sim:.3f}</span>'
+            if db_sim is not None
+            else ""
+        )
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -1093,6 +1102,11 @@ def render_meal_result_multi(payload: Dict[str, Any], meal_items: List[Dict[str,
             db_conf = float(it.get("db_confidence", 0) or 0)
         except Exception:
             db_conf = 0.0
+        try:
+            db_sim = it.get("db_similarity", None)
+            db_sim = float(db_sim) if db_sim is not None else None
+        except Exception:
+            db_sim = None
         db_ru = str(it.get("matched_name") or "—")
         db_en = str(it.get("matched_en") or "")
         db_extra = f" ({db_en})" if db_en else ""
@@ -1113,8 +1127,13 @@ def render_meal_result_multi(payload: Dict[str, Any], meal_items: List[Dict[str,
             f"<strong>ИИ</strong><br/>{gname}<br/>"
             f'<span class="muted">Уверенность ИИ: {ai_conf * 100.0:.0f}%</span><br/><br/>'
             f"<strong>База</strong><br/>{db_ru}{db_extra}<br/>"
-            f'<span class="muted">Уверенность базы: {db_conf * 100.0:.0f}%</span><br/>'
-            f'<span class="muted">Калории: {kcal_line}</span>'
+            f'<span class="muted">Уверенность базы: {db_conf * 100.0:.0f}%</span>'
+            + (
+                f'<br/><span class="muted">Similarity (cosine): {db_sim:.3f}</span>'
+                if db_sim is not None
+                else ""
+            )
+            + f'<br/><span class="muted">Калории: {kcal_line}</span>'
             f"</div>",
             unsafe_allow_html=True,
         )
@@ -1344,6 +1363,7 @@ def main():
                                     if not rr:
                                         continue
                                     rr["score"] = float(max(0.0, min(1.0, sc))) * 100.0
+                                    rr["similarity"] = float(sc)
                                     candidates_df_i_rows.append(rr)
                                     cand_rows.append(
                                         {
@@ -1362,6 +1382,7 @@ def main():
                                 mru = ""
                                 men = ""
                                 db_conf = 0.0
+                                db_sim: Optional[float] = None
                                 if hits:
                                     mid0, sc0 = hits[0]
                                     rr0 = db_by_id.get(int(mid0))
@@ -1371,8 +1392,13 @@ def main():
                                             db_conf = float(max(0.0, min(1.0, float(sc0))))
                                         except Exception:
                                             db_conf = 0.0
+                                        try:
+                                            db_sim = float(sc0)
+                                        except Exception:
+                                            db_sim = None
                                         rr0 = dict(rr0)
                                         rr0["score"] = db_conf * 100.0
+                                        rr0["similarity"] = db_sim
                                         row = pd.Series(rr0)
                                         unk = False
                                         mru = str(row.get("name", ""))
@@ -1400,6 +1426,7 @@ def main():
                                         "gemini_name": ai_detected_name,
                                         "ai_confidence": float(ai_detected_conf or 0),
                                         "db_confidence": db_conf,
+                                        "db_similarity": db_sim,
                                         "gemini_portion": 0.0,
                                         "user_portion_allocated": portion_i,
                                         "matched_name": mru,
@@ -1462,6 +1489,7 @@ def main():
                                     "gemini_name": x["gemini_name"],
                                     "ai_confidence": float(x.get("ai_confidence", 0) or 0),
                                     "db_confidence": float(x.get("db_confidence", 0) or 0),
+                                    "db_similarity": x.get("db_similarity", None),
                                     "user_portion_allocated": x["user_portion_allocated"],
                                     "matched_name": x["matched_name"],
                                     "matched_en": x["matched_en"],

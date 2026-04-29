@@ -4,6 +4,7 @@ import os
 import pathlib
 import re
 import math
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -458,6 +459,19 @@ def clip_index_files_exist() -> bool:
         return bool(mp_cfg.FAISS_INDEX_PATH.is_file() and mp_cfg.MEAL_IDS_PATH.is_file())
     except Exception:
         return False
+
+
+def _warmup_clip_in_background() -> None:
+    """
+    Avoid first-user 60s+ latency from CLIP weight loading by warming the retriever
+    right after the app starts. This runs in a background thread and does not block UI.
+    """
+    try:
+        if not clip_index_files_exist():
+            return
+        _clip_meal_retriever_cached()
+    except Exception:
+        return
 
 
 @st.cache_resource
@@ -1153,6 +1167,13 @@ def render_meal_result(payload: Dict[str, Any]):
 def main():
     ensure_session()
     try_hydrate_user_from_browser()
+
+    # Warm CLIP model/index early to avoid first analysis taking 60s+.
+    # Controlled via env so you can disable if resources are tight.
+    if os.environ.get("MEAL_PIPELINE_WARMUP_CLIP", "1") == "1":
+        if not st.session_state.get("_clip_warmup_started"):
+            st.session_state["_clip_warmup_started"] = True
+            threading.Thread(target=_warmup_clip_in_background, daemon=True).start()
 
     st.title("Проверка блюда")
     st.caption("Фото, что вы реально съели — сравнение с ИИ и базой Nutristeppe.")

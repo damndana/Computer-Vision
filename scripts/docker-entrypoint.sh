@@ -70,5 +70,6 @@ exec python -u -m streamlit run app.py \
   --server.port="${PORT}" \
   --server.address=0.0.0.0 \
   --server.headless=true \
+  --server.fileWatcherType=none \
   --server.enableXsrfProtection=false \
   --browser.gatherUsageStats=false

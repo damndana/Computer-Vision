@@ -26,7 +26,8 @@ COPY . .
 RUN mkdir -p /app/data \
     && chmod +x /app/scripts/docker-entrypoint.sh
 
-EXPOSE 8501
+EXPOSE 8080
 
-# Entrypoint: optional FAISS build at start, then Streamlit (do not replace with bare CMD)
-ENTRYPOINT ["/app/scripts/docker-entrypoint.sh"]
+# Default process: FastAPI service (for integration into other apps).
+# Dokploy will run this image command unless overridden in service settings.
+CMD ["uvicorn", "meal_pipeline.api:app", "--host", "0.0.0.0", "--port", "8080"]

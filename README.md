@@ -13,6 +13,10 @@ Modules live under `meal_pipeline/` (`embedding_generator.py`, `vector_index.py`
 
 The **Streamlit** main page uses the same `data/*.index` + `data/*.npy` when present: then **название блюда не обязательно** (кандидаты из CLIP+FAISS).
 
+## Documentation
+
+- Integration & architecture guide: `docs/INTEGRATION.md`
+
 **Docker (Dokploy):**
 
 - The app expects CLIP+FAISS artifacts under `MEAL_PIPELINE_DATA_DIR` (default `/app/data`):

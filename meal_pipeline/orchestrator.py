@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import io
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 from PIL import Image
@@ -39,9 +41,21 @@ def _get_gemini_key() -> str:
     raise RuntimeError("Set GOOGLE_GEMINI_API_KEY (or GEMINI_API_KEY) for the pipeline.")
 
 
+@lru_cache(maxsize=4)
+def _get_gemini_clients(api_key: str, model_name: str) -> tuple[MultiMealDetector, GeminiReasoner]:
+    # Reuse initialized Gemini model wrappers across requests to reduce per-request overhead.
+    return MultiMealDetector(api_key, model_name), GeminiReasoner(api_key, model_name)
+
+
 def _pil_to_jpeg(img: Image.Image, quality: int = 88) -> bytes:
     buf = io.BytesIO()
-    img.convert("RGB").save(buf, format="JPEG", quality=quality, optimize=True)
+    max_dim = int(getattr(config, "GEMINI_MAX_IMAGE_DIM", 768) or 768)
+    q = int(getattr(config, "GEMINI_JPEG_QUALITY", quality) or quality)
+    im = img.convert("RGB")
+    # Downscale for faster Gemini inference (bandwidth + server-side compute).
+    if max(im.size) > max_dim:
+        im.thumbnail((max_dim, max_dim), resample=Image.Resampling.LANCZOS)
+    im.save(buf, format="JPEG", quality=q, optimize=True)
     return buf.getvalue()
 
 
@@ -78,8 +92,7 @@ def analyze_meal(
     """
     api_key = _get_gemini_key()
     jpeg = _pil_to_jpeg(image)
-    detector = MultiMealDetector(api_key, config.GEMINI_MODEL)
-    reasoner = GeminiReasoner(api_key, config.GEMINI_MODEL)
+    detector, reasoner = _get_gemini_clients(api_key, config.GEMINI_MODEL)
 
     layout = detector.analyze_plate(jpeg)
     k = config.TOP_K_RETRIEVAL
@@ -93,9 +106,8 @@ def analyze_meal(
         cands = _candidates_for_ids(retriever, hits, meals)
         if cands:
             top_db = cands[0]
-            print(
-                f"[DB retrieval] top='{top_db.get('name','')}' score={float(top_db.get('retrieval_score', 0.0)):.4f}"
-            )
+            print(f"Meal name from Database (top-1): {str(top_db.get('name',''))}")
+            print(f"Database score (top-1): {float(top_db.get('retrieval_score', 0.0)):.4f}")
         picks = reasoner.select_from_candidates(jpeg, cands, slot_hint=None)
         if not picks and cands:
             top = cands[0]
@@ -112,11 +124,11 @@ def analyze_meal(
             ai_name = str(p.get("meal_name") or row.get("name", ""))
             ai_conf = float(p.get("confidence", 0) or 0)
             db_score = _retrieval_score_for_meal_id(cands, mid)
-            print(f"[AI detected] meal='{ai_name}' confidence={ai_conf:.3f}")
+            print(f"Meal name from AI: {ai_name}")
+            print(f"AI confidence: {ai_conf:.3f}")
             if db_score is not None:
-                print(
-                    f"[DB matched] meal='{str(row.get('name',''))}' score={float(db_score):.4f}"
-                )
+                print(f"Meal name from Database (matched): {str(row.get('name',''))}")
+                print(f"Database score (matched): {float(db_score):.4f}")
             nut = compute_nutrition_for_portion(row, float(portion_grams))
             dishes_out.append(
                 {
@@ -133,7 +145,8 @@ def analyze_meal(
         return {"dishes": dishes_out, "plate_layout": {"dish_count": 1, "dishes": layout.dishes}}
 
     # Multi: per-dish text retrieval + reasoner
-    for slot in layout.dishes:
+    slot_payloads: List[Dict[str, Any]] = []
+    for i, slot in enumerate(layout.dishes):
         desc = str(slot.get("description", ""))
         frac = float(slot.get("fraction", 1.0 / len(layout.dishes)))
         part_g = max(1.0, float(portion_grams) * frac)
@@ -143,10 +156,36 @@ def analyze_meal(
         cands = _candidates_for_ids(retriever, hits, meals)
         if cands:
             top_db = cands[0]
-            print(
-                f"[DB retrieval] slot='{desc}' top='{top_db.get('name','')}' score={float(top_db.get('retrieval_score', 0.0)):.4f}"
-            )
-        picks = reasoner.select_from_candidates(jpeg, cands, slot_hint=desc)
+            print(f"Slot hint: {desc}")
+            print(f"Meal name from Database (top-1): {str(top_db.get('name',''))}")
+            print(f"Database score (top-1): {float(top_db.get('retrieval_score', 0.0)):.4f}")
+        slot_payloads.append(
+            {"slot_idx": i, "desc": desc, "part_g": part_g, "meals": meals, "cands": cands}
+        )
+
+    def _reason_one_slot(payload: Dict[str, Any]) -> Tuple[int, List[Dict[str, Any]]]:
+        local_reasoner = GeminiReasoner(api_key, config.GEMINI_MODEL)
+        picks_local = local_reasoner.select_from_candidates(
+            jpeg, payload["cands"], slot_hint=payload["desc"]
+        )
+        return int(payload["slot_idx"]), picks_local
+
+    max_workers = int(getattr(config, "GEMINI_PARALLEL_WORKERS", 3) or 3)
+    max_workers = max(1, min(max_workers, len(slot_payloads)))
+    picks_by_slot: Dict[int, List[Dict[str, Any]]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = [ex.submit(_reason_one_slot, p) for p in slot_payloads]
+        for fut in as_completed(futs):
+            slot_idx, picks = fut.result()
+            picks_by_slot[slot_idx] = picks
+
+    for payload in slot_payloads:
+        desc = str(payload["desc"])
+        part_g = float(payload["part_g"])
+        meals = payload["meals"]
+        cands = payload["cands"]
+        picks = picks_by_slot.get(int(payload["slot_idx"]), [])
+
         if not picks and cands:
             top = cands[0]
             picks = [
@@ -156,17 +195,19 @@ def analyze_meal(
                     "confidence": 0.35,
                 }
             ]
+
         for p in picks[:1]:
             mid = int(p["meal_id"])
             row = meals.get(mid) or {}
             ai_name = str(p.get("meal_name") or row.get("name", ""))
             ai_conf = float(p.get("confidence", 0) or 0)
             db_score = _retrieval_score_for_meal_id(cands, mid)
-            print(f"[AI detected] slot='{desc}' meal='{ai_name}' confidence={ai_conf:.3f}")
+            print(f"Slot hint: {desc}")
+            print(f"Meal name from AI: {ai_name}")
+            print(f"AI confidence: {ai_conf:.3f}")
             if db_score is not None:
-                print(
-                    f"[DB matched] slot='{desc}' meal='{str(row.get('name',''))}' score={float(db_score):.4f}"
-                )
+                print(f"Meal name from Database (matched): {str(row.get('name',''))}")
+                print(f"Database score (matched): {float(db_score):.4f}")
             nut = compute_nutrition_for_portion(row, part_g)
             dishes_out.append(
                 {

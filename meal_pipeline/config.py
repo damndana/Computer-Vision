@@ -26,6 +26,13 @@ MEAL_IDS_PATH = pathlib.Path(
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 TOP_K_RETRIEVAL = int(os.environ.get("TOP_K_RETRIEVAL", "20"))
 
+# Speed/latency tuning
+# - Smaller images dramatically reduce Gemini latency/cost with minimal accuracy loss.
+# - Parallel workers reduce wall-time for multi-dish photos (1 Gemini call per dish).
+GEMINI_MAX_IMAGE_DIM = int(os.environ.get("GEMINI_MAX_IMAGE_DIM", "768"))
+GEMINI_JPEG_QUALITY = int(os.environ.get("GEMINI_JPEG_QUALITY", "75"))
+GEMINI_PARALLEL_WORKERS = int(os.environ.get("GEMINI_PARALLEL_WORKERS", "3"))
+
 # Reuse Nutristeppe table name from main app
 MEAL_TABLE = os.environ.get("MEAL_INFO_TABLE") or os.environ.get(
     "NUTRISTEPPE_TABLE", "database_nutristeppe"

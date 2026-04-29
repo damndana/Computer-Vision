@@ -76,6 +76,8 @@ Return ONLY valid JSON:
   "dish_count": <integer number of visually separate foods on the plate>,
   "dishes": [
     {
+      "name": "<short dish name (prefer Russian if obvious; else English)>",
+      "confidence": <number 0-1: how confident you are this name is correct>,
       "description": "<short English phrase: what this food is, e.g. grilled chicken breast>",
       "fraction": <number 0-1: approximate share of total food area/mass on the plate>
     }
@@ -87,6 +89,7 @@ Rules:
 - If several sides, list each separately.
 - fractions should sum to approximately 1.0 (±0.15).
 - descriptions must be concrete food names, not utensils or table.
+- confidence is your best estimate from the image only (not based on any database).
 """
         resp = self._model.generate_content(
             [
@@ -109,12 +112,24 @@ Rules:
         for d in dishes[:10]:
             if not isinstance(d, dict):
                 continue
+            name = str(d.get("name", "")).strip()
             desc = str(d.get("description", "")).strip() or "food item"
+            try:
+                conf = float(d.get("confidence", 0) or 0)
+            except (TypeError, ValueError):
+                conf = 0.0
             try:
                 frac = float(d.get("fraction", 1.0 / max(len(dishes), 1)))
             except (TypeError, ValueError):
                 frac = 1.0 / max(len(dishes), 1)
-            cleaned.append({"description": desc, "fraction": max(0.05, min(1.0, frac))})
+            cleaned.append(
+                {
+                    "name": name or desc,
+                    "confidence": max(0.0, min(1.0, conf)),
+                    "description": desc,
+                    "fraction": max(0.05, min(1.0, frac)),
+                }
+            )
 
         if not cleaned:
             return PlateLayout(1, [{"description": "meal on plate", "fraction": 1.0}])

@@ -1317,12 +1317,15 @@ def main():
                                     best_f = f
                                     main_i = i
 
-                            reasoner = GeminiReasoner(api_key, mp_cfg.GEMINI_MODEL)
-
                             meal_items: List[Dict[str, Any]] = []
                             per_dish_details: List[Dict[str, Any]] = []
                             for i, d in enumerate(dishes_layout[:MAX_PLATE_DISHES]):
                                 desc = str(d.get("description", "") or "").strip() or "food item"
+                                ai_detected_name = str(d.get("name") or "").strip() or desc
+                                try:
+                                    ai_detected_conf = float(d.get("confidence", 0) or 0)
+                                except (TypeError, ValueError):
+                                    ai_detected_conf = 0.0
                                 try:
                                     frac = float(d.get("fraction", 1.0 / max(len(dishes_layout), 1)) or 0)
                                 except (TypeError, ValueError):
@@ -1353,72 +1356,49 @@ def main():
                                     )
                                 candidates_df_i = pd.DataFrame(candidates_df_i_rows)
 
-                                with st.spinner(f"ИИ выбирает блюдо для: {desc[:40]}…"):
-                                    picks = reasoner.select_from_candidates(jpeg, cand_rows, slot_hint=desc)
-                                if not picks:
-                                    sel = {
-                                        "selected_meal_id": None,
-                                        "selected_meal_name": "unknown",
-                                        "confidence": 0.0,
-                                        "visible_ingredients": [],
-                                        "reasoning": f"No candidate matches this food: {desc}",
-                                        "role": role,
-                                    }
-                                    unk = True
-                                    row = None
-                                    gname = "unknown"
-                                    mru = ""
-                                    men = ""
-                                else:
-                                    p0 = picks[0]
-                                    mid = int(p0["meal_id"])
-                                    sel = {
-                                        "selected_meal_id": mid,
-                                        "selected_meal_name": str(p0.get("meal_name", "")),
-                                        "confidence": float(p0.get("confidence", 0) or 0),
-                                        "visible_ingredients": [],
-                                        "reasoning": f"Slot hint: {desc}",
-                                        "role": role,
-                                    }
-                                    unk = False
-                                    row = None
-                                    if not candidates_df_i.empty:
-                                        row = candidates_df_i[candidates_df_i["id"] == mid].head(1)
-                                        row = row.iloc[0] if not row.empty else None
-                                    if row is None:
-                                        # Fallback: look up in db directly
-                                        m = db[db["id"] == mid] if "id" in db.columns else pd.DataFrame()
-                                        row = m.iloc[0] if not m.empty else None
-                                    if row is None:
-                                        unk = True
-                                        gname = "unknown"
-                                        mru = ""
-                                        men = ""
-                                    else:
-                                        row = pd.Series(row)
-                                        gname = str(row.get("name", "") or sel["selected_meal_name"])
+                                # DB match (fast): take CLIP+FAISS top-1 candidate for this slot.
+                                unk = True
+                                row = None
+                                mru = ""
+                                men = ""
+                                db_conf = 0.0
+                                if hits:
+                                    mid0, sc0 = hits[0]
+                                    rr0 = db_by_id.get(int(mid0))
+                                    if rr0:
+                                        # Normalize CLIP cosine score into [0, 1] for UI %
+                                        try:
+                                            db_conf = float(max(0.0, min(1.0, float(sc0))))
+                                        except Exception:
+                                            db_conf = 0.0
+                                        rr0 = dict(rr0)
+                                        rr0["score"] = db_conf * 100.0
+                                        row = pd.Series(rr0)
+                                        unk = False
                                         mru = str(row.get("name", ""))
                                         men = str(row.get("name_en", "") or "")
+                                sel = {
+                                    "selected_meal_id": int(hits[0][0]) if hits else None,
+                                    "selected_meal_name": mru or "unknown",
+                                    "confidence": db_conf,
+                                    "visible_ingredients": [],
+                                    "reasoning": f"Slot hint: {desc}",
+                                    "role": role,
+                                }
 
                                 portion_i = float(user_portion) * frac
                                 if portion_i <= 0:
                                     portion_i = 0.0
 
-                                verified_i, vdetail_i = is_verified_smart("", gname, mru, men)
+                                verified_i, vdetail_i = is_verified_smart("", ai_detected_name, mru, men)
                                 per_dish_details.append(vdetail_i)
 
                                 rd = row.to_dict() if isinstance(row, pd.Series) else None
-                                db_conf = 0.0
-                                if isinstance(row, pd.Series):
-                                    try:
-                                        db_conf = float(row.get("score", 0) or 0) / 100.0
-                                    except Exception:
-                                        db_conf = 0.0
                                 meal_items.append(
                                     {
                                         "role": role,
-                                        "gemini_name": gname,
-                                        "ai_confidence": float(sel.get("confidence", 0) or 0),
+                                        "gemini_name": ai_detected_name,
+                                        "ai_confidence": float(ai_detected_conf or 0),
                                         "db_confidence": db_conf,
                                         "gemini_portion": 0.0,
                                         "user_portion_allocated": portion_i,
@@ -1471,7 +1451,7 @@ def main():
                             algo_json = {
                                 **algo_json,
                                 "multi_plate": len(meal_items) >= 2,
-                                "candidate_source": "clip_faiss_per_dish",
+                                "candidate_source": "clip_faiss_top1_per_dish",
                                 "photo_only": True,
                                 "plate_layout": dishes_layout,
                                 "per_dish_verification": per_dish_details,

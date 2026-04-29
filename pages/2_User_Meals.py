@@ -83,6 +83,20 @@ for row in rows:
             "</div>",
             unsafe_allow_html=True,
         )
+        # Confidence scores (if present) live inside algorithm_results["meal_items"]
+        ai_conf_top = None
+        db_conf_top = None
+        if isinstance(meal_items, list) and meal_items and isinstance(meal_items[0], dict):
+            try:
+                ai_conf_top = float(meal_items[0].get("ai_confidence", None))
+            except Exception:
+                ai_conf_top = None
+            try:
+                db_conf_top = float(meal_items[0].get("db_confidence", None))
+            except Exception:
+                db_conf_top = None
+        if ai_conf_top is not None:
+            st.caption(f"Уверенность ИИ: {ai_conf_top * 100.0:.0f}%")
         if multi_saved:
             with st.expander("Несколько блюд на снимке (сохранённый разбор)"):
                 for i, it in enumerate(meal_items):
@@ -90,11 +104,21 @@ for row in rows:
                         continue
                     role = str(it.get("role") or "—")
                     gnm = str(it.get("gemini_name") or "—")
+                    try:
+                        ai_conf_i = float(it.get("ai_confidence", 0) or 0)
+                    except Exception:
+                        ai_conf_i = 0.0
+                    try:
+                        db_conf_i = float(it.get("db_confidence", 0) or 0)
+                    except Exception:
+                        db_conf_i = 0.0
                     gp = float(it.get("gemini_portion") or 0)
                     ua = float(it.get("user_portion_allocated") or 0)
                     vr = "✅" if it.get("verified") else "❌"
                     st.markdown(
-                        f"**{i + 1}.** {role} · {gnm} · ИИ ~{gp:.0f} г · "
+                        f"**{i + 1}.** {role} · {gnm} · "
+                        f"ИИ {ai_conf_i * 100.0:.0f}% · База {db_conf_i * 100.0:.0f}% · "
+                        f"ИИ ~{gp:.0f} г · "
                         f"ваша доля ~{ua:.0f} г {vr}"
                     )
                     rs = str(it.get("reasoning") or "").strip()
@@ -110,6 +134,8 @@ for row in rows:
             "</div>",
             unsafe_allow_html=True,
         )
+        if db_conf_top is not None:
+            st.caption(f"Уверенность базы: {db_conf_top * 100.0:.0f}%")
 
         # Калории — отдельный заметный блок (главное на этой странице)
         st.markdown("##### Калории из базы данных")

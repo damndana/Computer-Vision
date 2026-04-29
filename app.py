@@ -1383,7 +1383,7 @@ def main():
                 if db.empty:
                     st.error("База блюд пуста или недоступна.")
                 else:
-                            db_by_id = _db_rows_by_id_cached()
+                    db_by_id = _db_rows_by_id_cached()
                     jpeg = compress_image_bytes(img)
                     engine = DishSearchEngine(db)
                     use_clip = False
@@ -1526,11 +1526,18 @@ def main():
                                 per_dish_details.append(vdetail_i)
 
                                 rd = row.to_dict() if isinstance(row, pd.Series) else None
+                                db_conf = 0.0
+                                if isinstance(row, pd.Series):
+                                    try:
+                                        db_conf = float(row.get("score", 0) or 0) / 100.0
+                                    except Exception:
+                                        db_conf = 0.0
                                 meal_items.append(
                                     {
                                         "role": role,
                                         "gemini_name": gname,
                                         "ai_confidence": float(sel.get("confidence", 0) or 0),
+                                        "db_confidence": db_conf,
                                         "gemini_portion": 0.0,
                                         "user_portion_allocated": portion_i,
                                         "matched_name": mru,
@@ -1591,6 +1598,8 @@ def main():
                                 {
                                     "role": x["role"],
                                     "gemini_name": x["gemini_name"],
+                                    "ai_confidence": float(x.get("ai_confidence", 0) or 0),
+                                    "db_confidence": float(x.get("db_confidence", 0) or 0),
                                     "user_portion_allocated": x["user_portion_allocated"],
                                     "matched_name": x["matched_name"],
                                     "matched_en": x["matched_en"],
@@ -1885,6 +1894,10 @@ def main():
                                     {
                                         "role": s["role"],
                                         "gemini_name": s["gemini_name"],
+                                    "ai_confidence": float(s["sel"].get("confidence", 0) or 0),
+                                    "db_confidence": float(s["row"].get("score", 0) or 0) / 100.0
+                                    if s["row"] is not None
+                                    else 0.0,
                                         "gemini_portion": float(s["gemini_portion"] or 0),
                                         "user_portion_allocated": float(
                                             s["user_portion_allocated"] or 0
@@ -1910,6 +1923,8 @@ def main():
                                 {
                                     "role": x["role"],
                                     "gemini_name": x["gemini_name"],
+                                    "ai_confidence": float(x.get("ai_confidence", 0) or 0),
+                                    "db_confidence": float(x.get("db_confidence", 0) or 0),
                                     "gemini_portion": x["gemini_portion"],
                                     "user_portion_allocated": x["user_portion_allocated"],
                                     "matched_name": x["matched_name"],

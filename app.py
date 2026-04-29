@@ -1009,119 +1009,59 @@ def render_meal_result_single(payload: Dict[str, Any]):
     selection_detail: Dict[str, Any] = payload.get("selection_detail") or {}
 
     st.divider()
+    # Minimal output (requested): show only AI name+confidence and DB name+score
     st.subheader("Итог")
-    badge = (
-        '<span class="badge-ok">Подтверждено</span>'
-        if verified
-        else '<span class="badge-bad">Не подтверждено</span>'
+    st.markdown("**Вы**")
+    st.markdown(
+        f'<div class="card">{user_dish} · {user_portion:.0f} г</div>', unsafe_allow_html=True
     )
-    st.markdown(badge, unsafe_allow_html=True)
-    if payload.get("photo_only"):
-        st.caption(
-            "Режим только по фото: подтверждение — по согласованию ответа ИИ со строкой базы "
-            f"(порог ≈ {GEMINI_DB_MIN:.0f}%)."
-        )
-    else:
-        st.caption(
-            "Подтверждение: ваше название близко к ответу ИИ, а ответ ИИ согласуется с выбранной строкой базы "
-            f"(пороги схожести ≈ {USER_GEMINI_MIN:.0f}% / {GEMINI_DB_MIN:.0f}%)."
-        )
 
-    st.markdown("**Порция**" if payload.get("photo_only") else "**Вы указали**")
-    st.markdown(f'<div class="card">{user_dish} · {user_portion:.0f} г</div>', unsafe_allow_html=True)
-    st.markdown("**ИИ**")
     ai_conf = 0.0
     try:
         ai_conf = float((primary or {}).get("confidence", 0) or 0)
     except Exception:
         ai_conf = 0.0
+    st.markdown("**ИИ**")
     st.markdown(
         f'<div class="card">{gemini_name}<br/>'
-        f'<span class="muted">Уверенность ИИ: {ai_conf * 100.0:.0f}%</span><br/>'
-        f'{gemini_portion:.0f} г</div>',
+        f'<span class="muted">Уверенность ИИ: {ai_conf * 100.0:.0f}%</span>'
+        f"</div>",
         unsafe_allow_html=True,
     )
-    if selection_detail.get("reasoning"):
-        st.markdown(
-            f'<div class="card muted"><strong>Почему так</strong><br/>'
-            f'{selection_detail.get("reasoning", "")}</div>',
-            unsafe_allow_html=True,
-        )
-    vis = selection_detail.get("visible_ingredients") or []
-    if isinstance(vis, list) and vis:
-        st.caption("На фото (по ИИ): " + ", ".join(str(x) for x in vis))
-    iv = selection_detail.get("ingredient_verify")
-    if isinstance(iv, dict) and iv.get("confidence") is not None:
-        c = float(iv.get("confidence", 0) or 0)
-        ok = bool(iv.get("consistent", True))
-        st.caption(
-            f"Сверка с описанием блюда в базе: {'согласуется' if ok else 'сомнительно'} "
-            f"(уверенность {c:.2f})."
-        )
 
-    st.markdown("**Калории из базы**")
+    db_name = "—"
+    db_name_en = ""
+    db_conf = 0.0
     if hybrid_records:
-        ser0 = pd.Series(hybrid_records[0])
-        n_u = nutrition_for_row(ser0, user_portion)
-        n_g = (
-            nutrition_for_row(ser0, gemini_portion) if gemini_portion > 0 else None
-        )
-        m1, m2 = st.columns(2)
-        with m1:
-            st.metric(
-                f"На вашу порцию ({user_portion:.0f} г)",
-                f"{n_u['kilocalories']:.0f} ккал",
-            )
-        with m2:
-            if n_g is not None:
-                st.metric(
-                    f"На порцию ИИ ({gemini_portion:.0f} г)",
-                    f"{n_g['kilocalories']:.0f} ккал",
-                )
-            else:
-                st.metric("На порцию ИИ", "—")
-    else:
-        st.warning("Нет совпадения в базе — калории из справочника не посчитаны.")
-
-    st.markdown("**Совпадения в базе**")
-    fl = (
-        "Выбрано по фото (из кандидатов)"
-        if payload.get("constrained_visual_pick")
-        else "Лучшее совпадение"
+        try:
+            r0 = hybrid_records[0] or {}
+            db_name = str(r0.get("name", "") or "—")
+            db_name_en = str(r0.get("name_en", "") or "")
+            db_conf = float(r0.get("score", 0) or 0) / 100.0
+        except Exception:
+            pass
+    extra = f" ({db_name_en})" if db_name_en else ""
+    st.markdown("**База**")
+    st.markdown(
+        f'<div class="card">{db_name}{extra}<br/>'
+        f'<span class="muted">Уверенность базы: {db_conf * 100.0:.0f}%</span>'
+        f"</div>",
+        unsafe_allow_html=True,
     )
-    render_match_cards(hybrid_records, user_portion, gemini_portion, first_label=fl)
-
+    # Calories (minimal): from matched DB row, scaled to user's portion
     if hybrid_records:
-        nut = nutrition_for_row(pd.Series(hybrid_records[0]), user_portion)
-        nut_ai = (
-            nutrition_for_row(pd.Series(hybrid_records[0]), gemini_portion)
-            if gemini_portion > 0
-            else None
-        )
-        macro = (
-            f'<div class="card muted"><strong>БЖУ по лучшему совпадению</strong><br/>'
-            f'Ваша порция: {nut["kilocalories"]:.0f} ккал · Б {nut["protein_g"]:.1f} г · '
-            f'Ж {nut["fat_g"]:.1f} г · У {nut["carb_g"]:.1f} г'
-        )
-        if nut_ai is not None:
-            macro += (
-                f'<br/>Порция ИИ: {nut_ai["kilocalories"]:.0f} ккал · '
-                f'Б {nut_ai["protein_g"]:.1f} г · Ж {nut_ai["fat_g"]:.1f} г · '
-                f'У {nut_ai["carb_g"]:.1f} г'
+        try:
+            kcal = nutrition_for_row(pd.Series(hybrid_records[0]), float(user_portion))[
+                "kilocalories"
+            ]
+            st.markdown("**Калории**")
+            st.markdown(
+                f'<div class="card">{kcal:.0f} ккал</div>',
+                unsafe_allow_html=True,
             )
-        macro += "</div>"
-        st.markdown(macro, unsafe_allow_html=True)
-
-    if len(dishes) > 1:
-        with st.expander("Другие объекты на фото"):
-            for d in dishes:
-                if d is primary:
-                    continue
-                st.write(f"- {d['dish_name']} (~{d['portion_grams']:.0f} g)")
-
-    if algo_json:
-        with st.expander("Детали подбора (алгоритмы)"):
-            st.json(algo_json)
+        except Exception:
+            pass
+    return
 
 
 def render_meal_result_multi(payload: Dict[str, Any], meal_items: List[Dict[str, Any]]):
@@ -1135,38 +1075,13 @@ def render_meal_result_multi(payload: Dict[str, Any], meal_items: List[Dict[str,
 
     st.divider()
     st.subheader("Итог")
-    badge = (
-        '<span class="badge-ok">Подтверждено</span>'
-        if verified
-        else '<span class="badge-bad">Не подтверждено</span>'
-    )
-    st.markdown(badge, unsafe_allow_html=True)
-    if payload.get("photo_only"):
-        st.caption(
-            "Только фото: для каждого блюда проверяется согласование ответа ИИ со строкой базы "
-            f"(порог ≈ {GEMINI_DB_MIN:.0f}%). "
-            "Зелёная галочка — если **все** пункты прошли проверку."
-        )
-    else:
-        st.caption(
-            "Для каждого блюда: ваше название сравнивается с ответом ИИ по этому пункту, "
-            "ответ ИИ — со строкой базы "
-            f"(пороги ≈ {USER_GEMINI_MIN:.0f}% / {GEMINI_DB_MIN:.0f}%). "
-            "Зелёная галочка — только если **все** распознанные блюда прошли проверку."
-        )
-
+    st.markdown("**Вы**")
     st.markdown(
-        "**Порция (на всё фото)**" if payload.get("photo_only") else "**Вы указали (на всё фото)**"
-    )
-    st.markdown(f'<div class="card">{user_dish} · {user_portion:.0f} г</div>', unsafe_allow_html=True)
-    st.markdown("**ИИ — несколько блюд**")
-    st.markdown(
-        f'<div class="card">{gemini_name} · суммарно ~{gemini_portion:.0f} г (оценка по фото)</div>',
-        unsafe_allow_html=True,
+        f'<div class="card">{user_dish} · {user_portion:.0f} г</div>', unsafe_allow_html=True
     )
 
-    total_u = 0.0
-    total_g = 0.0
+    st.markdown("**ИИ и База (по каждому блюду)**")
+    total_kcal = 0.0
     for idx, it in enumerate(meal_items):
         role = str(it.get("role") or "other")
         gname = str(it.get("gemini_name") or "—")
@@ -1174,74 +1089,41 @@ def render_meal_result_multi(payload: Dict[str, Any], meal_items: List[Dict[str,
             ai_conf = float(it.get("ai_confidence", 0) or 0)
         except Exception:
             ai_conf = 0.0
+        try:
+            db_conf = float(it.get("db_confidence", 0) or 0)
+        except Exception:
+            db_conf = 0.0
+        db_ru = str(it.get("matched_name") or "—")
+        db_en = str(it.get("matched_en") or "")
+        db_extra = f" ({db_en})" if db_en else ""
         gport = float(it.get("gemini_portion") or 0)
         ualloc = float(it.get("user_portion_allocated") or 0)
-        v_ok = bool(it.get("verified"))
-        badge_i = "✅" if v_ok else "❌"
-        st.markdown(f"##### {badge_i} Блюдо {idx + 1} · {role}")
-        st.markdown(
-            f'<div class="card"><strong>{gname}</strong><br/>'
-            f'<span class="muted">Уверенность ИИ: {ai_conf * 100.0:.0f}%</span><br/>'
-            f"Порция ИИ: ~{gport:.0f} г · ваша доля от общей граммовки: ~{ualloc:.0f} г</div>",
-            unsafe_allow_html=True,
-        )
-        sd = it.get("selection_detail") or {}
-        if sd.get("reasoning"):
-            st.markdown(
-                f'<div class="card muted">{sd.get("reasoning", "")}</div>',
-                unsafe_allow_html=True,
-            )
-        vis = sd.get("visible_ingredients") or []
-        if isinstance(vis, list) and vis:
-            st.caption("На фото (по ИИ): " + ", ".join(str(x) for x in vis))
-        iv = sd.get("ingredient_verify")
-        if isinstance(iv, dict) and iv.get("confidence") is not None:
-            c = float(iv.get("confidence", 0) or 0)
-            ok = bool(iv.get("consistent", True))
-            st.caption(
-                f"Сверка с описанием в базе: {'согласуется' if ok else 'сомнительно'} ({c:.2f})."
-            )
+        st.markdown(f"##### Блюдо {idx + 1} · {role}")
+        kcal_line = "—"
         row_dict = it.get("nutrition_row_dict")
         if isinstance(row_dict, dict) and row_dict:
-            ser = pd.Series(row_dict)
-            nu = nutrition_for_row(ser, ualloc)
-            ng = nutrition_for_row(ser, gport) if gport > 0 else None
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric(f"Ккал (ваша доля ~{ualloc:.0f} г)", f"{nu['kilocalories']:.0f}")
-            with c2:
-                if ng is not None:
-                    st.metric(f"Ккал (порция ИИ ~{gport:.0f} г)", f"{ng['kilocalories']:.0f}")
-                else:
-                    st.metric("Ккал (порция ИИ)", "—")
-            total_u += float(nu["kilocalories"])
-            if ng is not None:
-                total_g += float(ng["kilocalories"])
-        else:
-            st.info("Нет строки справочника для этого пункта.")
-
-    st.markdown("**Сумма по распознанным блюдам (ккал)**")
+            try:
+                kcal_val = float(nutrition_for_row(pd.Series(row_dict), float(ualloc))["kilocalories"])
+                kcal_line = f"{kcal_val:.0f} ккал"
+                total_kcal += kcal_val
+            except Exception:
+                pass
+        st.markdown(
+            f'<div class="card">'
+            f"<strong>ИИ</strong><br/>{gname}<br/>"
+            f'<span class="muted">Уверенность ИИ: {ai_conf * 100.0:.0f}%</span><br/><br/>'
+            f"<strong>База</strong><br/>{db_ru}{db_extra}<br/>"
+            f'<span class="muted">Уверенность базы: {db_conf * 100.0:.0f}%</span><br/>'
+            f'<span class="muted">Калории: {kcal_line}</span>'
+            f"</div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown("**Калории (сумма)**")
     st.markdown(
-        f'<div class="card muted">По вашей граммовке (доли): <strong>{total_u:.0f}</strong> ккал<br/>'
-        f"По порциям ИИ: <strong>{total_g:.0f}</strong> ккал</div>",
+        f'<div class="card">{total_kcal:.0f} ккал</div>',
         unsafe_allow_html=True,
     )
-
-    st.markdown("**Кандидаты из базы (по вашему названию)**")
-    st.caption(
-        "Один общий список кандидатов для снимка; ниже — оценки текстового поиска, без разбивки по каждому блюду."
-    )
-    render_match_cards(
-        hybrid_records,
-        user_portion,
-        gemini_portion if gemini_portion > 0 else 1.0,
-        first_label="Топ по названию",
-        show_kcal_lines=False,
-    )
-
-    if algo_json:
-        with st.expander("Детали подбора (алгоритмы)"):
-            st.json(algo_json)
+    return
 
 
 def render_meal_result(payload: Dict[str, Any]):

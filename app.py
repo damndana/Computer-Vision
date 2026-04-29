@@ -920,6 +920,26 @@ def load_database() -> pd.DataFrame:
     return load_database_csv(base)
 
 
+@st.cache_resource
+def _db_rows_by_id_cached() -> Dict[int, Dict[str, Any]]:
+    """
+    Fast lookup cache for CLIP/FAISS hit -> meal row.
+    Avoids repeated expensive dataframe filtering like: db[db["id"] == mid]
+    """
+    df = load_database()
+    if df is None or df.empty or "id" not in df.columns:
+        return {}
+    # Ensure stable int keys and plain dict values
+    out: Dict[int, Dict[str, Any]] = {}
+    for _, r in df.iterrows():
+        try:
+            rid = int(r.get("id"))
+        except Exception:
+            continue
+        out[rid] = r.to_dict()
+    return out
+
+
 def ensure_session():
     if "user_name" not in st.session_state:
         st.session_state.user_name = ""
@@ -1010,8 +1030,15 @@ def render_meal_result_single(payload: Dict[str, Any]):
     st.markdown("**Порция**" if payload.get("photo_only") else "**Вы указали**")
     st.markdown(f'<div class="card">{user_dish} · {user_portion:.0f} г</div>', unsafe_allow_html=True)
     st.markdown("**ИИ**")
+    ai_conf = 0.0
+    try:
+        ai_conf = float((primary or {}).get("confidence", 0) or 0)
+    except Exception:
+        ai_conf = 0.0
     st.markdown(
-        f'<div class="card">{gemini_name} · {gemini_portion:.0f} г</div>',
+        f'<div class="card">{gemini_name}<br/>'
+        f'<span class="muted">Уверенность ИИ: {ai_conf * 100.0:.0f}%</span><br/>'
+        f'{gemini_portion:.0f} г</div>',
         unsafe_allow_html=True,
     )
     if selection_detail.get("reasoning"):
@@ -1143,6 +1170,10 @@ def render_meal_result_multi(payload: Dict[str, Any], meal_items: List[Dict[str,
     for idx, it in enumerate(meal_items):
         role = str(it.get("role") or "other")
         gname = str(it.get("gemini_name") or "—")
+        try:
+            ai_conf = float(it.get("ai_confidence", 0) or 0)
+        except Exception:
+            ai_conf = 0.0
         gport = float(it.get("gemini_portion") or 0)
         ualloc = float(it.get("user_portion_allocated") or 0)
         v_ok = bool(it.get("verified"))
@@ -1150,6 +1181,7 @@ def render_meal_result_multi(payload: Dict[str, Any], meal_items: List[Dict[str,
         st.markdown(f"##### {badge_i} Блюдо {idx + 1} · {role}")
         st.markdown(
             f'<div class="card"><strong>{gname}</strong><br/>'
+            f'<span class="muted">Уверенность ИИ: {ai_conf * 100.0:.0f}%</span><br/>'
             f"Порция ИИ: ~{gport:.0f} г · ваша доля от общей граммовки: ~{ualloc:.0f} г</div>",
             unsafe_allow_html=True,
         )
@@ -1351,6 +1383,7 @@ def main():
                 if db.empty:
                     st.error("База блюд пуста или недоступна.")
                 else:
+                            db_by_id = _db_rows_by_id_cached()
                     jpeg = compress_image_bytes(img)
                     engine = DishSearchEngine(db)
                     use_clip = False
@@ -1422,10 +1455,9 @@ def main():
                                 cand_rows: List[Dict[str, Any]] = []
                                 candidates_df_i_rows: List[Dict[str, Any]] = []
                                 for mid, sc in hits:
-                                    m = db[db["id"] == int(mid)] if "id" in db.columns else pd.DataFrame()
-                                    if m.empty:
+                                    rr = db_by_id.get(int(mid))
+                                    if not rr:
                                         continue
-                                    rr = m.iloc[0].to_dict()
                                     rr["score"] = float(max(0.0, min(1.0, sc))) * 100.0
                                     candidates_df_i_rows.append(rr)
                                     cand_rows.append(
@@ -1498,6 +1530,7 @@ def main():
                                     {
                                         "role": role,
                                         "gemini_name": gname,
+                                        "ai_confidence": float(sel.get("confidence", 0) or 0),
                                         "gemini_portion": 0.0,
                                         "user_portion_allocated": portion_i,
                                         "matched_name": mru,

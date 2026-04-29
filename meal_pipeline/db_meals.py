@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import psycopg2
+from psycopg2.extras import RealDictCursor
 
 
 def pg_conn():
@@ -45,19 +46,34 @@ def fetch_meals_by_ids(ids: List[int]) -> Dict[int, Dict[str, Any]]:
         raise RuntimeError("DATABASE_URL is not set")
     safe = meal_table_name()
     uniq = sorted({int(i) for i in ids})
-    placeholders = ",".join(["%s"] * len(uniq))
-    sql = f'SELECT * FROM "{safe}" WHERE id IN ({placeholders})'
     try:
-        df = pd.read_sql_query(sql, conn, params=uniq)
+        # Fetch only columns used by nutrition + prompting (reduces transfer and speeds up query).
+        cols = [
+            "id",
+            "name",
+            "name_en",
+            "ingredients",
+            "steps",
+            "serving_size_g",
+            "kilocalories",
+            "protein",
+            "fat",
+            "carbohydrate",
+        ]
+        placeholders = ",".join(["%s"] * len(uniq))
+        sql = f'SELECT {", ".join(cols)} FROM "{safe}" WHERE id IN ({placeholders})'
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(sql, uniq)
+            rows = cur.fetchall()
     finally:
         conn.close()
-    df.columns = df.columns.str.strip()
     out: Dict[int, Dict[str, Any]] = {}
-    for _, row in df.iterrows():
+    for row in rows:
         rid = int(row.get("id", row.get("meal_id", -1)))
         if rid < 0:
             continue
-        out[rid] = row.to_dict()
+        # RealDictCursor already returns plain dict.
+        out[rid] = dict(row)
     return out
 
 

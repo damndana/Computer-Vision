@@ -146,22 +146,34 @@ def analyze_meal(
 
     # Multi: per-dish text retrieval + reasoner
     slot_payloads: List[Dict[str, Any]] = []
+    all_ids: List[int] = []
     for i, slot in enumerate(layout.dishes):
         desc = str(slot.get("description", ""))
         frac = float(slot.get("fraction", 1.0 / len(layout.dishes)))
         part_g = max(1.0, float(portion_grams) * frac)
         hits = retriever.retrieve_for_text(desc, k)
         ids = [h[0] for h in hits]
-        meals = fetch_meals_by_ids(ids)
+        all_ids.extend(ids)
+        # We'll fetch DB rows once for all slots, then build candidates per slot.
+        slot_payloads.append(
+            {"slot_idx": i, "desc": desc, "part_g": part_g, "hits": hits, "ids": ids}
+        )
+
+    meals_all = fetch_meals_by_ids(all_ids)
+
+    # Now build per-slot candidates using the shared DB cache
+    for payload in slot_payloads:
+        hits = payload["hits"]
+        ids = payload["ids"]
+        meals = {mid: meals_all.get(mid) for mid in ids if meals_all.get(mid) is not None}
         cands = _candidates_for_ids(retriever, hits, meals)
         if cands:
             top_db = cands[0]
-            print(f"Slot hint: {desc}")
+            print(f"Slot hint: {payload['desc']}")
             print(f"Meal name from Database (top-1): {str(top_db.get('name',''))}")
             print(f"Database score (top-1): {float(top_db.get('retrieval_score', 0.0)):.4f}")
-        slot_payloads.append(
-            {"slot_idx": i, "desc": desc, "part_g": part_g, "meals": meals, "cands": cands}
-        )
+        payload["meals"] = meals
+        payload["cands"] = cands
 
     def _reason_one_slot(payload: Dict[str, Any]) -> Tuple[int, List[Dict[str, Any]]]:
         local_reasoner = GeminiReasoner(api_key, config.GEMINI_MODEL)

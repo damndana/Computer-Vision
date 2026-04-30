@@ -30,3 +30,8 @@ The **Streamlit** main page uses the same `data/*.index` + `data/*.npy` when pre
 - Model download cache is stored under `${MEAL_PIPELINE_DATA_DIR}/hf_cache` by default (can be overridden by `HF_HOME`).
 
 If Gemini returns a 404 about a deprecated model, set `GEMINI_MODEL` in the environment (default is `gemini-2.5-flash`).
+
+## Dockerfiles
+
+- `Dockerfile`: **Streamlit UI** (default; serves the website on port `8501`)
+- `Dockerfile.api`: **FastAPI API-only** image (serves API on port `8080`)
